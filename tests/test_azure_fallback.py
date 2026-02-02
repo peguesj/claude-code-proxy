@@ -9,6 +9,9 @@ os.environ["AZURE_API_KEY"] = "test-azure-key"
 os.environ["AZURE_API_BASE"] = "https://azure.test"
 os.environ["AZURE_API_VERSION"] = "2025-04-01-preview"
 
+# Ensure repo root is in sys.path so we can import server when running from tests/ folder
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 # Reload server module so it picks up the environment changes
 import server
 importlib.reload(server)
@@ -34,6 +37,7 @@ client = TestClient(server.app)
 
 response = client.post("/v1/messages", json={
     "model": "claude-3-sonnet-20240229",
+    "max_tokens": 100,
     "messages": [{"role": "user", "content": "Hello"}],
 })
 
