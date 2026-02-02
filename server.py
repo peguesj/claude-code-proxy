@@ -1436,7 +1436,35 @@ async def create_message(
                 200  # Assuming success at this point
             )
             # Ensure we use the async version for streaming
-            response_generator = await litellm.acompletion(**litellm_request)
+            try:
+                response_generator = await litellm.acompletion(**litellm_request)
+            except Exception as e:
+                # Detect Anthropic 404 / provider not found errors and attempt Azure fallback once
+                err_str = str(e)
+                if ("anthropicexception" in err_str.lower() or "resource not found" in err_str.lower() or "anthropic" in err_str.lower()) and AZURE_API_KEY and not litellm_request.get("_retried_with_azure"):
+                    logger.warning("Anthropic provider returned NotFound; attempting Azure OpenAI fallback for streaming request")
+                    # Apply Azure fallback mapping
+                    def _apply_azure_fallback():
+                        model_lower = request.model.lower()
+                        if "sonnet" in model_lower:
+                            deployment = AZURE_DEPLOYMENT_MAP.get(BIG_MODEL, next(iter(AZURE_DEPLOYMENT_MAP.values())))
+                            litellm_request["model"] = f"azure/{deployment}"
+                        elif "haiku" in model_lower:
+                            deployment = AZURE_DEPLOYMENT_MAP.get(SMALL_MODEL, next(iter(AZURE_DEPLOYMENT_MAP.values())))
+                            litellm_request["model"] = f"azure/{deployment}"
+                        else:
+                            # Default to first Azure deployment if nothing else
+                            litellm_request["model"] = f"azure/{next(iter(AZURE_DEPLOYMENT_MAP.values()))}"
+                        litellm_request["api_key"] = AZURE_API_KEY
+                        litellm_request["api_base"] = AZURE_API_BASE
+                        litellm_request["api_version"] = AZURE_API_VERSION
+                        litellm_request["_retried_with_azure"] = True
+                    _apply_azure_fallback()
+
+                    # Retry once
+                    response_generator = await litellm.acompletion(**litellm_request)
+                else:
+                    raise
             
             return StreamingResponse(
                 handle_streaming(response_generator, request),
@@ -1456,7 +1484,31 @@ async def create_message(
                 200  # Assuming success at this point
             )
             start_time = time.time()
-            litellm_response = litellm.completion(**litellm_request)
+            try:
+                litellm_response = litellm.completion(**litellm_request)
+            except Exception as e:
+                # Inspect error to see if it's an Anthropic model not found - then try Azure fallback once
+                err_str = str(e)
+                if ("anthropicexception" in err_str.lower() or "resource not found" in err_str.lower() or "anthropic" in err_str.lower()) and AZURE_API_KEY and not litellm_request.get("_retried_with_azure"):
+                    logger.warning("Anthropic provider returned NotFound; attempting Azure OpenAI fallback for sync request")
+                    # Apply Azure fallback mapping
+                    model_lower = request.model.lower()
+                    if "sonnet" in model_lower:
+                        deployment = AZURE_DEPLOYMENT_MAP.get(BIG_MODEL, next(iter(AZURE_DEPLOYMENT_MAP.values())))
+                        litellm_request["model"] = f"azure/{deployment}"
+                    elif "haiku" in model_lower:
+                        deployment = AZURE_DEPLOYMENT_MAP.get(SMALL_MODEL, next(iter(AZURE_DEPLOYMENT_MAP.values())))
+                        litellm_request["model"] = f"azure/{deployment}"
+                    else:
+                        litellm_request["model"] = f"azure/{next(iter(AZURE_DEPLOYMENT_MAP.values()))}"
+                    litellm_request["api_key"] = AZURE_API_KEY
+                    litellm_request["api_base"] = AZURE_API_BASE
+                    litellm_request["api_version"] = AZURE_API_VERSION
+                    litellm_request["_retried_with_azure"] = True
+                    # Retry once
+                    litellm_response = litellm.completion(**litellm_request)
+                else:
+                    raise
             logger.debug(f"✅ RESPONSE RECEIVED: Model={litellm_request.get('model')}, Time={time.time() - start_time:.2f}s")
             
             # Convert LiteLLM response to Anthropic format
