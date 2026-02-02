@@ -82,6 +82,11 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# Azure OpenAI configuration
+AZURE_API_KEY = os.environ.get("AZURE_API_KEY")
+AZURE_API_BASE = os.environ.get("AZURE_API_BASE")
+AZURE_API_VERSION = os.environ.get("AZURE_API_VERSION", "2025-04-01-preview")
+
 # Get Vertex AI project and location from environment (if set)
 VERTEX_PROJECT = os.environ.get("VERTEX_PROJECT", "unset")
 VERTEX_LOCATION = os.environ.get("VERTEX_LOCATION", "unset")
@@ -102,18 +107,50 @@ SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4.1-mini")
 
 # List of OpenAI models
 OPENAI_MODELS = [
-    "o3-mini",
+    # GPT-4o family
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4o-audio-preview",
+    "gpt-4o-mini-audio-preview",
+    "chatgpt-4o-latest",
+    # GPT-4.1 family
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    # GPT-4.5
+    "gpt-4.5-preview",
+    # GPT-5 family
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-5-pro",
+    "gpt-5-codex",
+    "gpt-5-chat",
+    # GPT-5.1 family
+    "gpt-5.1",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex-max",
+    "gpt-5.1-chat",
+    # GPT-5.2 family (latest)
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.2-chat",
+    # Reasoning models
     "o1",
     "o1-mini",
     "o1-pro",
-    "gpt-4.5-preview",
-    "gpt-4o",
-    "gpt-4o-audio-preview",
-    "chatgpt-4o-latest",
-    "gpt-4o-mini",
-    "gpt-4o-mini-audio-preview",
-    "gpt-4.1",  # Added default big model
-    "gpt-4.1-mini" # Added default small model
+    "o3-mini",
+    "o3",
+    "o3-pro",
+    "o4-mini",
+    # Codex
+    "codex-mini",
+    # Audio models (chat completion capable)
+    "gpt-audio",
+    "gpt-audio-mini",
+    # Model router (auto-selects optimal model)
+    "model-router",
 ]
 
 # List of Gemini models
@@ -121,6 +158,48 @@ GEMINI_MODELS = [
     "gemini-2.5-flash",
     "gemini-2.5-pro"
 ]
+
+# Azure OpenAI deployment map: model name -> deployment name
+# Users can override via AZURE_DEPLOYMENT_MAP env var (JSON string)
+_default_azure_map = {
+    # GPT-4o family (Standard)
+    "gpt-4o": "gpt-4o",
+    "gpt-4o-mini": "gpt-4o-mini",
+    # GPT-4.1 family (Standard + GlobalStandard)
+    "gpt-4.1": "gpt-4-1",
+    "gpt-4.1-mini": "gpt-4-1-mini",
+    "gpt-4.1-nano": "gpt-4-1-nano",
+    # GPT-5 family (GlobalStandard)
+    "gpt-5": "gpt-5",
+    "gpt-5-mini": "gpt-5-mini",
+    "gpt-5-nano": "gpt-5-nano",
+    "gpt-5-chat": "gpt-5-chat",
+    # GPT-5.1 family (DataZoneStandard + GlobalStandard)
+    "gpt-5.1": "gpt-5-1",
+    "gpt-5.1-chat": "gpt-5-1-chat",
+    # GPT-5.2 family (GlobalStandard, latest)
+    "gpt-5.2": "gpt-5-2",
+    "gpt-5.2-codex": "gpt-5-2-codex",
+    "gpt-5.2-chat": "gpt-5-2-chat",
+    # Reasoning models
+    "o1": "o1",
+    "o3-mini": "o3-mini",
+    "o3": "o3",
+    "o4-mini": "o4-mini",
+    # Codex
+    "codex-mini": "codex-mini",
+    # Audio models (chat completion capable)
+    "gpt-audio": "gpt-audio",
+    "gpt-audio-mini": "gpt-audio-mini",
+    # Model router (auto-selects optimal model)
+    "model-router": "model-router",
+}
+try:
+    _custom_map = os.environ.get("AZURE_DEPLOYMENT_MAP", "")
+    AZURE_DEPLOYMENT_MAP = json.loads(_custom_map) if _custom_map else _default_azure_map
+except json.JSONDecodeError:
+    AZURE_DEPLOYMENT_MAP = _default_azure_map
+AZURE_MODELS = list(AZURE_DEPLOYMENT_MAP.keys())
 
 # Helper function to clean schema for Gemini
 def clean_gemini_schema(schema: Any) -> Any:
@@ -212,6 +291,8 @@ class MessagesRequest(BaseModel):
             clean_v = clean_v[7:]
         elif clean_v.startswith('gemini/'):
             clean_v = clean_v[7:]
+        elif clean_v.startswith('azure/'):
+            clean_v = clean_v[6:]
 
         # --- Mapping Logic --- START ---
         mapped = False
@@ -222,7 +303,11 @@ class MessagesRequest(BaseModel):
 
         # Map Haiku to SMALL_MODEL based on provider preference
         elif 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
+            if PREFERRED_PROVIDER == "azure" and SMALL_MODEL in AZURE_MODELS:
+                deployment = AZURE_DEPLOYMENT_MAP.get(SMALL_MODEL, SMALL_MODEL)
+                new_model = f"azure/{deployment}"
+                mapped = True
+            elif PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{SMALL_MODEL}"
                 mapped = True
             else:
@@ -231,7 +316,11 @@ class MessagesRequest(BaseModel):
 
         # Map Sonnet to BIG_MODEL based on provider preference
         elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
+            if PREFERRED_PROVIDER == "azure" and BIG_MODEL in AZURE_MODELS:
+                deployment = AZURE_DEPLOYMENT_MAP.get(BIG_MODEL, BIG_MODEL)
+                new_model = f"azure/{deployment}"
+                mapped = True
+            elif PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{BIG_MODEL}"
                 mapped = True
             else:
@@ -242,17 +331,21 @@ class MessagesRequest(BaseModel):
         elif not mapped:
             if clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
                 new_model = f"gemini/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+                mapped = True
+            elif clean_v in AZURE_MODELS and PREFERRED_PROVIDER == "azure":
+                deployment = AZURE_DEPLOYMENT_MAP.get(clean_v, clean_v)
+                new_model = f"azure/{deployment}"
+                mapped = True
             elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
                 new_model = f"openai/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+                mapped = True
         # --- Mapping Logic --- END ---
 
         if mapped:
             logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
              # If no mapping occurred and no prefix exists, log warning or decide default
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/')):
+             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'azure/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for model: '{original_model}'. Using as is.")
              new_model = v # Ensure we return the original if no rule applied
 
@@ -290,12 +383,18 @@ class TokenCountRequest(BaseModel):
             clean_v = clean_v[7:]
         elif clean_v.startswith('gemini/'):
             clean_v = clean_v[7:]
+        elif clean_v.startswith('azure/'):
+            clean_v = clean_v[6:]
 
         # --- Mapping Logic --- START ---
         mapped = False
         # Map Haiku to SMALL_MODEL based on provider preference
         if 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
+            if PREFERRED_PROVIDER == "azure" and SMALL_MODEL in AZURE_MODELS:
+                deployment = AZURE_DEPLOYMENT_MAP.get(SMALL_MODEL, SMALL_MODEL)
+                new_model = f"azure/{deployment}"
+                mapped = True
+            elif PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{SMALL_MODEL}"
                 mapped = True
             else:
@@ -304,7 +403,11 @@ class TokenCountRequest(BaseModel):
 
         # Map Sonnet to BIG_MODEL based on provider preference
         elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
+            if PREFERRED_PROVIDER == "azure" and BIG_MODEL in AZURE_MODELS:
+                deployment = AZURE_DEPLOYMENT_MAP.get(BIG_MODEL, BIG_MODEL)
+                new_model = f"azure/{deployment}"
+                mapped = True
+            elif PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
                 new_model = f"gemini/{BIG_MODEL}"
                 mapped = True
             else:
@@ -315,16 +418,20 @@ class TokenCountRequest(BaseModel):
         elif not mapped:
             if clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
                 new_model = f"gemini/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+                mapped = True
+            elif clean_v in AZURE_MODELS and PREFERRED_PROVIDER == "azure":
+                deployment = AZURE_DEPLOYMENT_MAP.get(clean_v, clean_v)
+                new_model = f"azure/{deployment}"
+                mapped = True
             elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
                 new_model = f"openai/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+                mapped = True
         # --- Mapping Logic --- END ---
 
         if mapped:
             logger.debug(f"📌 TOKEN COUNT MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/')):
+             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'azure/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for token count model: '{original_model}'. Using as is.")
              new_model = v # Ensure we return the original if no rule applied
 
@@ -546,11 +653,11 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                 
                 messages.append({"role": msg.role, "content": processed_content})
     
-    # Cap max_tokens for OpenAI models to their limit of 16384
+    # Cap max_tokens for OpenAI/Azure models to their limit of 16384
     max_tokens = anthropic_request.max_tokens
-    if anthropic_request.model.startswith("openai/") or anthropic_request.model.startswith("gemini/"):
+    if anthropic_request.model.startswith("openai/") or anthropic_request.model.startswith("gemini/") or anthropic_request.model.startswith("azure/"):
         max_tokens = min(max_tokens, 16384)
-        logger.debug(f"Capping max_tokens to 16384 for OpenAI/Gemini model (original value: {anthropic_request.max_tokens})")
+        logger.debug(f"Capping max_tokens to 16384 for OpenAI/Gemini/Azure model (original value: {anthropic_request.max_tokens})")
     
     # Create LiteLLM request dict
     litellm_request = {
@@ -647,6 +754,8 @@ def convert_litellm_to_anthropic(litellm_response: Union[Dict[str, Any], Any],
             clean_model = clean_model[len("anthropic/"):]
         elif clean_model.startswith("openai/"):
             clean_model = clean_model[len("openai/"):]
+        elif clean_model.startswith("azure/"):
+            clean_model = clean_model[len("azure/"):]
         
         # Check if this is a Claude model (which supports content blocks)
         is_claude_model = clean_model.startswith("claude-")
@@ -1116,6 +1225,8 @@ async def create_message(
             clean_model = clean_model[len("anthropic/"):]
         elif clean_model.startswith("openai/"):
             clean_model = clean_model[len("openai/"):]
+        elif clean_model.startswith("azure/"):
+            clean_model = clean_model[len("azure/"):]
         
         logger.debug(f"📊 PROCESSING REQUEST: Model={request.model}, Stream={request.stream}")
         
@@ -1123,7 +1234,12 @@ async def create_message(
         litellm_request = convert_anthropic_to_litellm(request)
         
         # Determine which API key to use based on the model
-        if request.model.startswith("openai/"):
+        if request.model.startswith("azure/"):
+            litellm_request["api_key"] = AZURE_API_KEY
+            litellm_request["api_base"] = AZURE_API_BASE
+            litellm_request["api_version"] = AZURE_API_VERSION
+            logger.debug(f"Using Azure OpenAI with base={AZURE_API_BASE} for model: {request.model}")
+        elif request.model.startswith("openai/"):
             litellm_request["api_key"] = OPENAI_API_KEY
             # Use custom OpenAI base URL if configured
             if OPENAI_BASE_URL:
@@ -1141,11 +1257,31 @@ async def create_message(
                 litellm_request["api_key"] = GEMINI_API_KEY
                 logger.debug(f"Using Gemini API key for model: {request.model}")
         else:
-            litellm_request["api_key"] = ANTHROPIC_API_KEY
-            logger.debug(f"Using Anthropic API key for model: {request.model}")
+            # Prefer Anthropic if available
+            if ANTHROPIC_API_KEY:
+                litellm_request["api_key"] = ANTHROPIC_API_KEY
+                logger.debug(f"Using Anthropic API key for model: {request.model}")
+            # If Anthropic key is missing but Azure credentials exist, fall back to Azure
+            elif AZURE_API_KEY:
+                # Try to map Anthropic model names to Azure deployments when possible
+                model_lower = request.model.lower()
+                if "sonnet" in model_lower:
+                    deployment = AZURE_DEPLOYMENT_MAP.get(BIG_MODEL, next(iter(AZURE_DEPLOYMENT_MAP.values())))
+                    litellm_request["model"] = f"azure/{deployment}"
+                elif "haiku" in model_lower:
+                    deployment = AZURE_DEPLOYMENT_MAP.get(SMALL_MODEL, next(iter(AZURE_DEPLOYMENT_MAP.values())))
+                    litellm_request["model"] = f"azure/{deployment}"
+                # Set Azure credentials
+                litellm_request["api_key"] = AZURE_API_KEY
+                litellm_request["api_base"] = AZURE_API_BASE
+                litellm_request["api_version"] = AZURE_API_VERSION
+                logger.warning(f"No Anthropic key found; falling back to Azure OpenAI for model: {request.model}")
+            else:
+                logger.error("Missing Anthropic API key and no Azure/OpenAI credentials found")
+                raise HTTPException(status_code=500, detail="Missing Anthropic API key")
         
-        # For OpenAI models - modify request format to work with limitations
-        if "openai" in litellm_request["model"] and "messages" in litellm_request:
+        # For OpenAI/Azure models - modify request format to work with limitations
+        if ("openai" in litellm_request["model"] or litellm_request["model"].startswith("azure/")) and "messages" in litellm_request:
             logger.debug(f"Processing OpenAI model request: {litellm_request['model']}")
             
             # For OpenAI models, we need to convert content blocks to simple strings
@@ -1403,6 +1539,8 @@ async def count_tokens(
             clean_model = clean_model[len("anthropic/"):]
         elif clean_model.startswith("openai/"):
             clean_model = clean_model[len("openai/"):]
+        elif clean_model.startswith("azure/"):
+            clean_model = clean_model[len("azure/"):]
         
         # Convert the messages to a format LiteLLM can understand
         converted_request = convert_anthropic_to_litellm(
