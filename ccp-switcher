@@ -1,0 +1,639 @@
+#!/usr/bin/env bash
+#
+# ccp-switcher - Claude Code Proxy Model Switcher
+# Interactive TUI for switching models and presets
+#
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Constants & script location
+# ---------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+PROXY_PORT=8082
+
+# ---------------------------------------------------------------------------
+# Terminal capabilities (tput)
+# ---------------------------------------------------------------------------
+BOLD="$(tput bold 2>/dev/null || printf '')"
+DIM="$(tput dim 2>/dev/null || printf '')"
+RESET="$(tput sgr0 2>/dev/null || printf '')"
+CLR_GREEN="$(tput setaf 2 2>/dev/null || printf '')"
+CLR_CYAN="$(tput setaf 6 2>/dev/null || printf '')"
+CLR_YELLOW="$(tput setaf 3 2>/dev/null || printf '')"
+CLR_RED="$(tput setaf 1 2>/dev/null || printf '')"
+CLR_MAGENTA="$(tput setaf 5 2>/dev/null || printf '')"
+CLR_WHITE="$(tput setaf 7 2>/dev/null || printf '')"
+CLR_BLUE="$(tput setaf 4 2>/dev/null || printf '')"
+
+# Box-drawing characters
+H_LINE="═"
+V_LINE="║"
+TL_CORNER="╔"
+TR_CORNER="╗"
+BL_CORNER="╚"
+BR_CORNER="╝"
+T_LEFT="╠"
+T_RIGHT="╣"
+
+# ---------------------------------------------------------------------------
+# Model catalog -- order matters for display
+# ---------------------------------------------------------------------------
+declare -a MODEL_NAMES=(
+    "gpt-4.1"
+    "gpt-4.1-mini"
+    "gpt-4.1-nano"
+    "gpt-4o"
+    "o4-mini"
+    "o3-mini"
+    "o3"
+    "gpt-4.5-preview"
+    "gpt-5"
+    "gpt-5-mini"
+    "gpt-5.2"
+    "gpt-5.2-chat"
+    "gpt-5.2-codex"
+    "codex-mini"
+)
+
+# Parallel to MODEL_NAMES -- keep in same order
+declare -a MODEL_DESCRIPTIONS=(
+    "Latest GPT-4 class - best coding & general"
+    "Efficient GPT-4 class"
+    "Ultra-efficient GPT-4 class"
+    "Strong multimodal model"
+    "Best reasoning (mini class)"
+    "Reasoning model"
+    "Full reasoning model"
+    "GPT-4.5 preview"
+    "GPT-5 flagship"
+    "GPT-5 efficient"
+    "Latest GPT-5.2"
+    "GPT-5.2 Codex - optimized for code"
+    "Codex Mini - fast code generation"
+)
+
+# ---------------------------------------------------------------------------
+# Provider catalog
+# ---------------------------------------------------------------------------
+declare -a PROVIDER_NAMES=(
+    "azure"
+    "openai"
+    "google"
+    "anthropic"
+)
+
+# Parallel to PROVIDER_NAMES -- keep in same order
+declare -a PROVIDER_DESCRIPTIONS=(
+    "Azure OpenAI Service"
+    "OpenAI API Direct"
+    "Google Gemini / Vertex AI"
+    "Anthropic Claude (passthrough)"
+)
+
+# ---------------------------------------------------------------------------
+# Preset definitions
+# ---------------------------------------------------------------------------
+declare -a PRESET_NAMES=(
+    "Best Performance"
+    "Best Reasoning"
+    "Balanced"
+    "Cost Efficient"
+    "Speed"
+    "Coding"
+    "OpenAI Direct"
+    "2026 Best Overall"
+)
+
+declare -a PRESET_PROVIDERS=( "azure" "azure" "azure" "azure" "azure" "azure" "openai" "azure" )
+declare -a PRESET_BIG=(       "gpt-4.1" "gpt-4.1" "gpt-4o" "o4-mini" "gpt-4o" "gpt-4.1" "gpt-4.1" "gpt-5.2-codex" )
+declare -a PRESET_SMALL=(     "gpt-4o" "o4-mini" "o4-mini" "gpt-4.1-mini" "gpt-4.1-mini" "o4-mini" "gpt-4.1-mini" "gpt-5.2-chat" )
+declare -a PRESET_FRONTIER=(  "gpt-5.2" "o3" "gpt-5.2" "gpt-5" "gpt-5" "gpt-5.2-codex" "gpt-5.2" "gpt-5.2" )
+
+declare -a PRESET_TAGS=(
+    "Maximum capability, highest cost"
+    "Optimized for complex reasoning tasks"
+    "Good performance at moderate cost"
+    "Minimize spend while staying capable"
+    "Fastest response times"
+    "Optimized for code generation"
+    "Use OpenAI API directly (not Azure)"
+    "Top-tier 2026 flagship models powered by Azure"
+)
+
+# ---------------------------------------------------------------------------
+# .env helpers
+# ---------------------------------------------------------------------------
+env_get() {
+    # Read a variable value from the .env file, stripping quotes
+    local key="$1"
+    if [[ ! -f "$ENV_FILE" ]]; then
+        printf ""
+        return
+    fi
+    local val
+    val="$(grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | head -n1 | sed 's/^[^=]*=//' | sed 's/^"//;s/"$//' | sed "s/^'//;s/'$//")" || true
+    printf '%s' "$val"
+}
+
+env_set() {
+    # Set a variable in the .env file. Creates the line if missing.
+    local key="$1"
+    local val="$2"
+
+    if [[ ! -f "$ENV_FILE" ]]; then
+        printf '%s="%s"\n' "$key" "$val" > "$ENV_FILE"
+        return
+    fi
+
+    if grep -qE "^${key}=" "$ENV_FILE" 2>/dev/null; then
+        # Use a different delimiter for sed to handle slashes in values
+        sed -i '' "s|^${key}=.*|${key}=\"${val}\"|" "$ENV_FILE"
+    else
+        printf '%s="%s"\n' "$key" "$val" >> "$ENV_FILE"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Read current config
+# ---------------------------------------------------------------------------
+load_config() {
+    CUR_PROVIDER="$(env_get PREFERRED_PROVIDER)"
+    CUR_BIG="$(env_get BIG_MODEL)"
+    CUR_SMALL="$(env_get SMALL_MODEL)"
+    CUR_FRONTIER="$(env_get FRONTIER_MODEL)"
+
+    # Defaults if empty
+    [[ -z "$CUR_PROVIDER" ]]  && CUR_PROVIDER="openai"
+    [[ -z "$CUR_BIG" ]]       && CUR_BIG="gpt-4.1"
+    [[ -z "$CUR_SMALL" ]]     && CUR_SMALL="gpt-4.1-mini"
+    [[ -z "$CUR_FRONTIER" ]]  && CUR_FRONTIER="gpt-5.2"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# Drawing helpers
+# ---------------------------------------------------------------------------
+box_width() {
+    # Returns usable interior width of the terminal (capped at 52 for the box)
+    local cols
+    cols="$(tput cols 2>/dev/null || printf '80')"
+    local w=52
+    if (( cols < w + 2 )); then
+        w=$(( cols - 2 ))
+    fi
+    printf '%d' "$w"
+}
+
+draw_line() {
+    local left="$1" right="$2"
+    local w
+    w="$(box_width)"
+    printf ' %s' "$left"
+    for (( i=0; i<w; i++ )); do printf '%s' "$H_LINE"; done
+    printf '%s\n' "$right"
+}
+
+draw_text() {
+    # Print a line inside the box, padded to fit
+    # $1 = content (may include ANSI codes)
+    # Content is left-aligned with 1 space padding inside each wall
+    local content="$1"
+    local w
+    w="$(box_width)"
+
+    # Strip ANSI to measure visible length
+    local stripped
+    stripped="$(printf '%s' "$content" | sed 's/\x1b\[[0-9;]*m//g')"
+    local visible_len=${#stripped}
+
+    local inner=$(( w - 2 ))  # 1 space padding each side
+    local pad=$(( inner - visible_len ))
+    if (( pad < 0 )); then pad=0; fi
+
+    printf ' %s %s%s' "$V_LINE" " $content" ""
+    for (( i=0; i<pad; i++ )); do printf ' '; done
+    printf ' %s\n' "$V_LINE"
+}
+
+draw_empty() {
+    local w
+    w="$(box_width)"
+    local inner=$(( w ))
+    printf ' %s' "$V_LINE"
+    for (( i=0; i<inner; i++ )); do printf ' '; done
+    printf '%s\n' "$V_LINE"
+}
+
+# ---------------------------------------------------------------------------
+# Mapping label (sonnet -> big, haiku -> small)
+# ---------------------------------------------------------------------------
+mapping_hint() {
+    local role="$1"  # big, small, or frontier
+    if [[ "$role" == "big" ]]; then
+        printf '%s(sonnet ->)%s' "${DIM}" "${RESET}"
+    elif [[ "$role" == "frontier" ]]; then
+        printf '%s(opus ->)%s' "${DIM}" "${RESET}"
+    else
+        printf '%s(haiku ->)%s' "${DIM}" "${RESET}"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Screens
+# ---------------------------------------------------------------------------
+clear_screen() {
+    printf '\033[2J\033[H'
+}
+
+proxy_is_running() {
+    lsof -ti:"$PROXY_PORT" &>/dev/null
+}
+
+draw_status_indicator() {
+    if proxy_is_running; then
+        printf '%s%s RUNNING %s' "${CLR_GREEN}" "${BOLD}" "${RESET}"
+    else
+        printf '%s%s STOPPED %s' "${CLR_RED}" "${BOLD}" "${RESET}"
+    fi
+}
+
+draw_main_menu() {
+    load_config
+    clear_screen
+
+    local status
+    status="$(draw_status_indicator)"
+
+    printf '\n'
+    draw_line "$TL_CORNER" "$TR_CORNER"
+    draw_text "${BOLD}${CLR_CYAN}  Claude Code Proxy - Model Switcher${RESET}"
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_empty
+    draw_text "${BOLD}Current Configuration:${RESET}"
+    draw_text "Provider:    ${CLR_CYAN}${BOLD}${CUR_PROVIDER}${RESET}"
+    draw_text "Frontier:    ${CLR_MAGENTA}${BOLD}${CUR_FRONTIER}${RESET}  $(mapping_hint frontier)"
+    draw_text "Big Model:   ${CLR_GREEN}${BOLD}${CUR_BIG}${RESET}  $(mapping_hint big)"
+    draw_text "Small Model: ${CLR_GREEN}${BOLD}${CUR_SMALL}${RESET}  $(mapping_hint small)"
+    draw_text "Proxy:       ${status}"
+    draw_empty
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_text "${BOLD}[P]${RESET} Presets          ${BOLD}[F]${RESET} Frontier Model"
+    draw_text "${BOLD}[B]${RESET} Big Model        ${BOLD}[S]${RESET} Small Model"
+    draw_text "${BOLD}[V]${RESET} Provider         ${BOLD}[R]${RESET} Restart Proxy"
+    draw_text "${BOLD}[Q]${RESET} Quit"
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_text "${BOLD}Quick Presets:${RESET}"
+    draw_text "${CLR_YELLOW}[1]${RESET} Best   ${CLR_YELLOW}[2]${RESET} Reasoning  ${CLR_YELLOW}[3]${RESET} Balanced"
+    draw_text "${CLR_YELLOW}[4]${RESET} Cheap  ${CLR_YELLOW}[5]${RESET} Speed      ${CLR_YELLOW}[6]${RESET} Coding"
+    draw_text "${CLR_YELLOW}[7]${RESET} OpenAI Direct  ${CLR_YELLOW}[8]${RESET} 2026 Best Overall"
+    draw_line "$BL_CORNER" "$BR_CORNER"
+    printf '\n'
+}
+
+# ---------------------------------------------------------------------------
+# Model selection submenu
+# ---------------------------------------------------------------------------
+show_model_menu() {
+    local role="$1"  # "big", "small", or "frontier"
+    local current
+    if [[ "$role" == "big" ]]; then
+        current="$CUR_BIG"
+    elif [[ "$role" == "frontier" ]]; then
+        current="$CUR_FRONTIER"
+    else
+        current="$CUR_SMALL"
+    fi
+
+    clear_screen
+    printf '\n'
+    draw_line "$TL_CORNER" "$TR_CORNER"
+    if [[ "$role" == "big" ]]; then
+        draw_text "${BOLD}${CLR_CYAN}  Select Big Model${RESET}  ${DIM}(mapped from sonnet)${RESET}"
+    elif [[ "$role" == "frontier" ]]; then
+        draw_text "${BOLD}${CLR_MAGENTA}  Select Frontier Model${RESET}  ${DIM}(mapped from opus)${RESET}"
+    else
+        draw_text "${BOLD}${CLR_CYAN}  Select Small Model${RESET}  ${DIM}(mapped from haiku)${RESET}"
+    fi
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_empty
+
+    local i=0
+    while (( i < ${#MODEL_NAMES[@]} )); do
+        local m="${MODEL_NAMES[$i]}"
+        local marker="  "
+        if [[ "$m" == "$current" ]]; then
+            marker="${CLR_GREEN}*${RESET} "
+        fi
+        local num
+        num="$(printf '%2d' "$(( i + 1 ))")"
+        local desc="${MODEL_DESCRIPTIONS[$i]:-}"
+        draw_text "${marker}${CLR_YELLOW}${num}.${RESET} ${BOLD}${m}${RESET}  ${DIM}${desc}${RESET}"
+        (( i++ ))
+    done
+
+    draw_empty
+    draw_text "${DIM}Enter number to select, or [B]ack to cancel${RESET}"
+    draw_line "$BL_CORNER" "$BR_CORNER"
+    printf '\n'
+
+    while true; do
+        printf '  %s>%s ' "${CLR_CYAN}" "${RESET}"
+        read -r choice
+        # lowercase
+        choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+
+        if [[ "$choice" == "b" || "$choice" == "back" || "$choice" == "q" ]]; then
+            return
+        fi
+
+        # Validate numeric
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#MODEL_NAMES[@]} )); then
+            local selected="${MODEL_NAMES[$(( choice - 1 ))]}"
+            if [[ "$role" == "big" ]]; then
+                env_set "BIG_MODEL" "$selected"
+                show_confirmation "Big Model" "$selected"
+            elif [[ "$role" == "frontier" ]]; then
+                env_set "FRONTIER_MODEL" "$selected"
+                show_confirmation "Frontier Model" "$selected"
+            else
+                env_set "SMALL_MODEL" "$selected"
+                show_confirmation "Small Model" "$selected"
+            fi
+            return
+        fi
+
+        printf '  %sInvalid choice. Enter 1-%d or [B]ack.%s\n' "${CLR_RED}" "${#MODEL_NAMES[@]}" "${RESET}"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Provider selection submenu
+# ---------------------------------------------------------------------------
+show_provider_menu() {
+    clear_screen
+    printf '\n'
+    draw_line "$TL_CORNER" "$TR_CORNER"
+    draw_text "${BOLD}${CLR_CYAN}  Select Preferred Provider${RESET}"
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_empty
+
+    local i=0
+    while (( i < ${#PROVIDER_NAMES[@]} )); do
+        local p="${PROVIDER_NAMES[$i]}"
+        local marker="  "
+        if [[ "$p" == "$CUR_PROVIDER" ]]; then
+            marker="${CLR_GREEN}*${RESET} "
+        fi
+        local num
+        num="$(printf '%2d' "$(( i + 1 ))")"
+        local desc="${PROVIDER_DESCRIPTIONS[$i]:-}"
+        draw_text "${marker}${CLR_YELLOW}${num}.${RESET} ${BOLD}${p}${RESET}  ${DIM}${desc}${RESET}"
+        (( i++ ))
+    done
+
+    draw_empty
+    draw_text "${DIM}Enter number to select, or [B]ack to cancel${RESET}"
+    draw_line "$BL_CORNER" "$BR_CORNER"
+    printf '\n'
+
+    while true; do
+        printf '  %s>%s ' "${CLR_CYAN}" "${RESET}"
+        read -r choice
+        choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+
+        if [[ "$choice" == "b" || "$choice" == "back" || "$choice" == "q" ]]; then
+            return
+        fi
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#PROVIDER_NAMES[@]} )); then
+            local selected="${PROVIDER_NAMES[$(( choice - 1 ))]}"
+            env_set "PREFERRED_PROVIDER" "$selected"
+            show_confirmation "Provider" "$selected"
+            return
+        fi
+
+        printf '  %sInvalid choice. Enter 1-%d or [B]ack.%s\n' "${CLR_RED}" "${#PROVIDER_NAMES[@]}" "${RESET}"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Presets list submenu
+# ---------------------------------------------------------------------------
+show_presets_menu() {
+    clear_screen
+    printf '\n'
+    draw_line "$TL_CORNER" "$TR_CORNER"
+    draw_text "${BOLD}${CLR_CYAN}  Preset Profiles${RESET}"
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_empty
+
+    local i=0
+    while (( i < ${#PRESET_NAMES[@]} )); do
+        local num
+        num="$(printf '%2d' "$(( i + 1 ))")"
+        local name="${PRESET_NAMES[$i]}"
+        local tag="${PRESET_TAGS[$i]}"
+        local prov="${PRESET_PROVIDERS[$i]}"
+        local big="${PRESET_BIG[$i]}"
+        local small="${PRESET_SMALL[$i]}"
+        local frontier="${PRESET_FRONTIER[$i]}"
+
+        draw_text "${CLR_YELLOW}${num}.${RESET} ${BOLD}${name}${RESET}"
+        draw_text "    ${DIM}${tag}${RESET}"
+        draw_text "    ${CLR_CYAN}${prov}${RESET}  ${CLR_MAGENTA}${frontier}${RESET} / ${CLR_GREEN}${big}${RESET} / ${CLR_GREEN}${small}${RESET}"
+        draw_empty
+        (( i++ ))
+    done
+
+    draw_text "${DIM}Enter number to apply, or [B]ack to cancel${RESET}"
+    draw_line "$BL_CORNER" "$BR_CORNER"
+    printf '\n'
+
+    while true; do
+        printf '  %s>%s ' "${CLR_CYAN}" "${RESET}"
+        read -r choice
+        choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+
+        if [[ "$choice" == "b" || "$choice" == "back" || "$choice" == "q" ]]; then
+            return
+        fi
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#PRESET_NAMES[@]} )); then
+            apply_preset "$(( choice - 1 ))"
+            return
+        fi
+
+        printf '  %sInvalid choice. Enter 1-%d or [B]ack.%s\n' "${CLR_RED}" "${#PRESET_NAMES[@]}" "${RESET}"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Apply a preset by index
+# ---------------------------------------------------------------------------
+apply_preset() {
+    local idx="$1"
+    local prov="${PRESET_PROVIDERS[$idx]}"
+    local big="${PRESET_BIG[$idx]}"
+    local small="${PRESET_SMALL[$idx]}"
+    local frontier="${PRESET_FRONTIER[$idx]}"
+    local name="${PRESET_NAMES[$idx]}"
+
+    env_set "PREFERRED_PROVIDER" "$prov"
+    env_set "BIG_MODEL" "$big"
+    env_set "SMALL_MODEL" "$small"
+    env_set "FRONTIER_MODEL" "$frontier"
+
+    clear_screen
+    printf '\n'
+    draw_line "$TL_CORNER" "$TR_CORNER"
+    draw_text "${BOLD}${CLR_GREEN}  Preset Applied: ${name}${RESET}"
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_empty
+    draw_text "Provider:    ${CLR_CYAN}${BOLD}${prov}${RESET}"
+    draw_text "Frontier:    ${CLR_MAGENTA}${BOLD}${frontier}${RESET}"
+    draw_text "Big Model:   ${CLR_GREEN}${BOLD}${big}${RESET}"
+    draw_text "Small Model: ${CLR_GREEN}${BOLD}${small}${RESET}"
+    draw_empty
+    draw_line "$BL_CORNER" "$BR_CORNER"
+    printf '\n'
+
+    prompt_restart
+}
+
+# ---------------------------------------------------------------------------
+# Confirmation message after a single change
+# ---------------------------------------------------------------------------
+show_confirmation() {
+    local label="$1"
+    local value="$2"
+
+    clear_screen
+    printf '\n'
+    draw_line "$TL_CORNER" "$TR_CORNER"
+    draw_text "${BOLD}${CLR_GREEN}  Updated!${RESET}"
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_empty
+    draw_text "${label}: ${CLR_GREEN}${BOLD}${value}${RESET}"
+    draw_empty
+    draw_line "$BL_CORNER" "$BR_CORNER"
+    printf '\n'
+
+    prompt_restart
+}
+
+# ---------------------------------------------------------------------------
+# Prompt user to restart proxy
+# ---------------------------------------------------------------------------
+prompt_restart() {
+    printf '  Restart proxy to apply changes? %s[Y/n]%s ' "${CLR_YELLOW}" "${RESET}"
+    read -r answer
+    answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ -z "$answer" || "$answer" == "y" || "$answer" == "yes" ]]; then
+        do_restart
+    else
+        printf '  %sSkipped.%s Changes will apply on next proxy start.\n' "${DIM}" "${RESET}"
+        sleep 1
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Restart the proxy server
+# ---------------------------------------------------------------------------
+do_restart() {
+    printf '\n  %sStopping proxy on port %s...%s\n' "${CLR_YELLOW}" "$PROXY_PORT" "${RESET}"
+    lsof -ti:"$PROXY_PORT" | xargs kill -9 2>/dev/null || true
+    sleep 1
+
+    printf '  %sStarting proxy...%s\n' "${CLR_GREEN}" "${RESET}"
+    cd "$SCRIPT_DIR" && nohup uv run uvicorn server:app --host 0.0.0.0 --port "$PROXY_PORT" --reload > /dev/null 2>&1 &
+    disown
+    sleep 2
+
+    if proxy_is_running; then
+        printf '  %s%sProxy is running on port %s%s\n' "${BOLD}" "${CLR_GREEN}" "$PROXY_PORT" "${RESET}"
+    else
+        printf '  %s%sFailed to start proxy. Check logs.%s\n' "${BOLD}" "${CLR_RED}" "${RESET}"
+    fi
+    sleep 1
+}
+
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+main() {
+    # Guard: ensure .env exists
+    if [[ ! -f "$ENV_FILE" ]]; then
+        printf '%sError: .env file not found at %s%s\n' "${CLR_RED}" "$ENV_FILE" "${RESET}"
+        printf 'Create one or copy from .env.example before running this tool.\n'
+        exit 1
+    fi
+
+    # Trap SIGINT for clean exit
+    trap 'printf "\n"; exit 0' INT
+
+    while true; do
+        draw_main_menu
+
+        printf '  %s>%s ' "${CLR_CYAN}" "${RESET}"
+        read -rsn1 key
+        printf '\n'
+
+        # Lowercase
+        key="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
+
+        case "$key" in
+            p)
+                show_presets_menu
+                ;;
+            f)
+                show_model_menu "frontier"
+                ;;
+            b)
+                show_model_menu "big"
+                ;;
+            s)
+                show_model_menu "small"
+                ;;
+            v)
+                show_provider_menu
+                ;;
+            r)
+                do_restart
+                ;;
+            q)
+                clear_screen
+                printf '\n  %sBye!%s\n\n' "${CLR_CYAN}" "${RESET}"
+                exit 0
+                ;;
+            1)
+                apply_preset 0
+                ;;
+            2)
+                apply_preset 1
+                ;;
+            3)
+                apply_preset 2
+                ;;
+            4)
+                apply_preset 3
+                ;;
+            5)
+                apply_preset 4
+                ;;
+            6)
+                apply_preset 5
+                ;;
+            7)
+                apply_preset 6
+                ;;
+            *)
+                # Ignore unknown keys
+                ;;
+        esac
+    done
+}
+
+main
