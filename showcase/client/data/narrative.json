@@ -1,0 +1,36 @@
+{
+  "audience": "partner",
+  "sections": [
+    {
+      "id": "overview",
+      "title": "What is CCP LiteLLM?",
+      "body": "A local FastAPI proxy that speaks the Anthropic Messages API on the wire, but dispatches requests through LiteLLM to any compatible backend — Azure OpenAI, OpenAI, Google Gemini, or Anthropic itself. Point ANTHROPIC_BASE_URL at http://localhost:8082 and Claude Code / Anthropic SDK clients route transparently to your chosen backend."
+    },
+    {
+      "id": "routing",
+      "title": "Multi-Provider Routing",
+      "body": "PREFERRED_PROVIDER selects the backend. BIG_MODEL, SMALL_MODEL, and FRONTIER_MODEL map Claude's sonnet/haiku/opus tiers to concrete deployment names (e.g. sonnet→gpt-4.1, opus→gpt-5.2). For Azure, AZURE_DEPLOYMENT_MAP JSON resolves 22 model-name→deployment-name pairs so each request targets the correct Azure OpenAI deployment."
+    },
+    {
+      "id": "fallback",
+      "title": "Azure Fallback Architecture",
+      "body": "When the proxy is configured for Anthropic but the upstream returns 404 (or ANTHROPIC_API_KEY is absent), the server automatically retries once against Azure OpenAI using the tier mapping. A _retried_with_azure flag prevents retry loops. Unit tests under tests/ verify the fallback semantics."
+    },
+    {
+      "id": "management",
+      "title": "Management Surfaces",
+      "body": "Three operator surfaces: (1) ccp-litellm CLI with start/stop/restart/status/log/troubleshoot; (2) a native Swift menu bar app with live status, model config, and login-item toggles; (3) an interactive ccp-switcher Bash TUI for changing tier→model mappings. LaunchAgents auto-start both proxy and menu bar at login."
+    },
+    {
+      "id": "security",
+      "title": "Supply-Chain Security Posture",
+      "body": "LiteLLM is pinned to >=1.77.7,<1.82.0 in pyproject.toml. This range blocks the malicious 1.82.7 / 1.82.8 releases (TeamPCP credential-stealer, March 2026) while mitigating CVE-2024-6825 (RCE, <1.40.13) and CVE-2024-8984 (DoS, <1.56.2). An incident-response checklist is documented in LITELLM_VULNERABILITY_POLICY.md."
+    }
+  ],
+  "stats": [
+    {"label": "Port", "value": "8082"},
+    {"label": "Providers", "value": "4"},
+    {"label": "Azure Deployments", "value": "22"},
+    {"label": "LiteLLM Pin", "value": ">=1.77.7,<1.82.0"}
+  ]
+}

@@ -1,0 +1,11 @@
+%% Claude Code Proxy — IDEA Lifecycle (rev-eng trace)
+stateDiagram-v2
+    [*] --> Discover
+    Discover: Discover\n(architecture scan, feature inventory)
+    Discover --> Define
+    Define: Define\n(personas, positioning, hypotheses)
+    Define --> Plan
+    Plan: Plan\n(5-wave roadmap, risk matrix)
+    Plan --> Execute
+    Execute: Execute\n(formation deployed, tests passing)
+    Execute --> [*]

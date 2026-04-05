@@ -1,0 +1,30 @@
+{
+  "phase": "execute",
+  "project": "claude-code-proxy",
+  "generated_at": "2026-04-05T00:00:00Z",
+  "formation_id": "fmt-ccp-revengr-20260405",
+  "sizing": "existing",
+  "phases_completed": ["discover", "define", "plan", "execute"],
+  "deployment": {
+    "host": "localhost",
+    "port": 8082,
+    "process_manager": "launchd",
+    "plist": "~/Library/LaunchAgents/com.ccp.litellm.proxy.plist",
+    "log_path": "/tmp/ccp-server.log",
+    "start_cmd": "uv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload"
+  },
+  "ci_cd": {"type": "manual", "runners": ["uv", "pytest"], "hooks": []},
+  "testing": {
+    "unit_tests": ["test_azure_fallback.py", "test_anthropic_404_fallback.py", "test_opus_frontier_mapping.py"],
+    "integration_tests": ["tests.py"],
+    "total_test_files": 4
+  },
+  "uat": {"manual_qa": ["ccp-litellm troubleshoot", "menu bar live status check", "ccp-switcher runtime model flip"]},
+  "git_stats": {"current_branch": "fix/azure-fallback-anthropic-missing", "recent_focus": "Azure fallback hardening"},
+  "monitoring": {"log": "/tmp/ccp-server.log", "health_endpoint": "GET /", "menubar_indicator": "CCP LiteLLM.app"},
+  "formation_topology": {
+    "squadrons": 3,
+    "swarms": 5,
+    "agents": 15
+  }
+}
