@@ -1,0 +1,155 @@
+{
+  "project_id": "ccp-revengr-20260405",
+  "project_name": "Claude Code Proxy (LiteLLM)",
+  "project_slug": "claude-code-proxy",
+  "project_type": "API Service",
+  "project_root": "/Users/jeremiah/Developer/claude-code-proxy",
+  "mode": "rev-eng",
+  "_note": "Canonical location ~/.claude/skills/idea/contexts/claude-code-proxy.json is outside sandbox; this mirror lives inside the project.",
+  "target_users": "Claude Code developers who want to route Anthropic-format requests to non-Anthropic backends (Azure OpenAI, OpenAI, Google Gemini/Vertex) while retaining the Claude Code CLI experience.",
+  "problem_statement": "Claude Code and other Anthropic-SDK clients are hardwired to the Anthropic API surface, but developers often need (or must) use alternative backends — Azure OpenAI for enterprise compliance, OpenAI directly, Google Gemini for cost, or self-hosted open models — without rewriting their tooling. A drop-in, Anthropic-compatible gateway is needed that translates requests/responses bidirectionally, handles streaming, tool use, and multi-provider fallback, while enforcing security constraints (pinned LiteLLM versions, supply-chain policy).",
+  "tech_stack": {
+    "language": "Python 3.11",
+    "framework": "FastAPI + uvicorn",
+    "translation_layer": "LiteLLM (>=1.77.7,<1.82.0)",
+    "backends": ["Azure OpenAI", "OpenAI", "Google Gemini (AI Studio)", "Google Vertex AI (ADC)", "Anthropic"],
+    "management_ui": "Swift/AppKit menu bar app (CcpMenuBar.swift + CcpModels.swift)",
+    "cli": "ccp-litellm (bash), ccp-switcher (bash TUI)",
+    "hosting": "localhost:8082 via uvicorn, LaunchAgents for login autostart"
+  },
+  "constraints": {
+    "supply_chain": "LiteLLM versions 1.82.7/1.82.8 banned (credential stealer); pinned <1.82.0",
+    "cve_compliance": "Must be >=1.77.7 to mitigate CVE-2024-6825 (RCE) and CVE-2024-8984 (DoS)",
+    "port": 8082,
+    "runtime": "local-only, single-user developer machine",
+    "attribution": "no AI/Claude attribution in external commits/PRs"
+  },
+  "integrations": ["Azure OpenAI", "OpenAI", "Google Gemini", "Google Vertex AI", "Anthropic", "Claude Code CLI", "LaunchAgents"],
+  "sizing": "existing",
+  "created_at": "2026-04-05T00:00:00Z",
+  "version": "4.0.0",
+  "phases": {
+    "discover": {
+      "completed_at": "2026-04-05T00:00:00Z",
+      "architecture_scan": {
+        "entry_point": "server.py (1789 lines)",
+        "endpoints": ["POST /v1/messages", "POST /v1/messages/count_tokens", "GET /"],
+        "middleware": ["auth_and_log (PROXY_API_KEY enforcement)"],
+        "core_converters": ["convert_anthropic_to_litellm", "convert_litellm_to_anthropic", "handle_streaming", "parse_tool_result_content", "clean_gemini_schema"],
+        "model_mapping": {"haiku": "SMALL_MODEL", "sonnet": "BIG_MODEL", "opus": "FRONTIER_MODEL"},
+        "azure_deployment_map": "JSON env var mapping OpenAI model names to Azure deployment names (22 entries)"
+      },
+      "feature_inventory": [
+        "Anthropic /v1/messages compatibility",
+        "Streaming SSE response translation",
+        "Tool-use translation (Anthropic tools <-> OpenAI function-calling)",
+        "Multi-modal content (text + image blocks)",
+        "Azure fallback when ANTHROPIC_API_KEY missing",
+        "One-shot Azure retry on Anthropic 404",
+        "Gemini schema sanitization",
+        "PROXY_API_KEY client auth",
+        "Colorized request logging",
+        "Menu bar status + model switcher (Swift)",
+        "Bash TUI switcher (ccp-switcher)",
+        "LaunchAgent autostart"
+      ],
+      "integration_points": [
+        {"type": "inbound", "protocol": "HTTP", "client": "Claude Code CLI", "env": "ANTHROPIC_BASE_URL=http://localhost:8082"},
+        {"type": "outbound", "provider": "Azure OpenAI", "auth": "AZURE_API_KEY"},
+        {"type": "outbound", "provider": "OpenAI", "auth": "OPENAI_API_KEY"},
+        {"type": "outbound", "provider": "Google Gemini", "auth": "GEMINI_API_KEY or Vertex ADC"},
+        {"type": "outbound", "provider": "Anthropic", "auth": "ANTHROPIC_API_KEY"}
+      ],
+      "jobs_to_be_done": {
+        "functional": [
+          "Route Anthropic-SDK requests to an arbitrary backend transparently",
+          "Map tier names (haiku/sonnet/opus) to concrete provider deployments",
+          "Preserve streaming + tool-use semantics end-to-end",
+          "Provide graceful fallback when primary provider is unavailable"
+        ],
+        "emotional": [
+          "Confidence that credentials are not exfiltrated via compromised dependencies",
+          "Frictionless switching of backend providers without touching the CLI"
+        ],
+        "social": [
+          "Enable enterprise use of Claude Code inside Azure-only organizations",
+          "Allow cost-conscious teams to use Gemini without abandoning Anthropic tooling"
+        ]
+      },
+      "scope_statement": "A local FastAPI proxy on port 8082 that presents the Anthropic /v1/messages surface to Claude Code and other Anthropic-SDK clients, translates requests and responses via LiteLLM to a configurable backend, supports streaming and tool-use, enforces a strict LiteLLM version pin for supply-chain safety, and exposes management tooling via a Swift menu bar app, a bash TUI, and a CLI. It does NOT host or train models, does not serve multi-tenant traffic, and is not intended for public-internet exposure."
+    },
+    "define": {
+      "completed_at": "2026-04-05T00:00:00Z",
+      "personas": [
+        {"name": "Enterprise Claude Code Developer", "role": "Staff engineer at Azure-mandated org", "need": "Use Claude Code with Azure OpenAI deployments for compliance", "pain": "Claude Code only speaks to api.anthropic.com by default"},
+        {"name": "Multi-Provider Power User", "role": "Indie/solo developer", "need": "Switch between GPT-4.1, GPT-5.2, Gemini 2.5 Pro per task", "pain": "Each provider has a different SDK and tooling ecosystem"},
+        {"name": "Security-Conscious Operator", "role": "Platform/SRE", "need": "Run a proxy whose dependency chain is audited and pinned", "pain": "LiteLLM has had active supply-chain attacks (1.82.7/1.82.8)"}
+      ],
+      "positioning_statement": "For Claude Code users who need backend flexibility, Claude Code Proxy is a local Anthropic-API-compatible gateway that routes requests to Azure OpenAI, OpenAI, Gemini, or Anthropic via LiteLLM.",
+      "hypotheses": [
+        {"id": "H1", "statement": "A 1:1 Anthropic<->LiteLLM translation layer can preserve streaming + tool-use fidelity", "status": "validated"},
+        {"id": "H2", "statement": "Tier-name remapping (haiku/sonnet/opus) gives users a stable mental model", "status": "validated"},
+        {"id": "H3", "statement": "Azure fallback improves UX when ANTHROPIC_API_KEY is missing or returns 404", "status": "validated"},
+        {"id": "H4", "statement": "A menu bar app lowers the cost of switching active model at runtime", "status": "validated"},
+        {"id": "H5", "statement": "Pinning LiteLLM <1.82.0 is sufficient to mitigate TeamPCP supply-chain attack", "status": "validated"}
+      ],
+      "market_size": {"value": "Internal single-user tool; estimated ~10k Claude Code users globally who would benefit", "segment": "Developer tools / AI gateways"}
+    },
+    "plan": {
+      "completed_at": "2026-04-05T00:00:00Z",
+      "roadmap": [
+        {"wave": 1, "name": "Core Translation", "stories": ["Anthropic->LiteLLM request convert", "LiteLLM->Anthropic response convert", "Streaming SSE bridge"]},
+        {"wave": 2, "name": "Multi-Provider Support", "stories": ["OpenAI backend", "Gemini backend + schema sanitize", "Azure backend + deployment map", "Vertex ADC auth"]},
+        {"wave": 3, "name": "Resilience & Fallback", "stories": ["PROXY_API_KEY auth", "Azure fallback on missing ANTHROPIC_API_KEY", "One-shot retry on Anthropic 404"]},
+        {"wave": 4, "name": "Management UX", "stories": ["ccp-litellm CLI", "ccp-switcher TUI", "Swift menu bar app", "LaunchAgents autostart"]},
+        {"wave": 5, "name": "Security & Supply Chain", "stories": ["LiteLLM version pinning", "VULNERABILITY_POLICY docs", "Open-source model strategy docs"]}
+      ],
+      "story_count": 15,
+      "wave_count": 5,
+      "risk_matrix": {
+        "high": 3,
+        "medium": 3,
+        "low": 2,
+        "risks": [
+          {"category": "Technical", "risk": "LiteLLM supply-chain attack (1.82.7/1.82.8)", "likelihood": 3, "impact": 5, "score": 15, "mitigation": "Pin <1.82.0 in pyproject.toml"},
+          {"category": "Technical", "risk": "LiteLLM CVE-2024-6825 RCE", "likelihood": 2, "impact": 5, "score": 10, "mitigation": "Pin >=1.77.7"},
+          {"category": "Integration", "risk": "Provider API drift", "likelihood": 4, "impact": 4, "score": 16, "mitigation": "Unit tests per conversion path"},
+          {"category": "Technical", "risk": "Credential leakage via logs", "likelihood": 2, "impact": 4, "score": 8, "mitigation": "MessageFilter blocks HTTP-Request log lines"},
+          {"category": "Resource", "risk": "Azure deployment name drift (22-entry map)", "likelihood": 3, "impact": 3, "score": 9, "mitigation": "AZURE_DEPLOYMENT_MAP env var + Model Manager"},
+          {"category": "Market", "risk": "Provider outages", "likelihood": 3, "impact": 3, "score": 9, "mitigation": "Azure fallback + 404 one-shot retry"},
+          {"category": "Timeline", "risk": "Solo-maintainer bottleneck", "likelihood": 3, "impact": 2, "score": 6, "mitigation": "Pin upper bound"},
+          {"category": "Technical", "risk": "Gemini schema incompatibility", "likelihood": 2, "impact": 2, "score": 4, "mitigation": "clean_gemini_schema sanitizer"}
+        ]
+      }
+    },
+    "execute": {
+      "started_at": "2026-04-05T00:00:00Z",
+      "completed_at": "2026-04-05T00:00:00Z",
+      "formation_id": "fmt-ccp-revengr-20260405",
+      "sizing": "existing",
+      "topology": {
+        "pattern": "single-process service + sidecar UIs",
+        "squadrons": [
+          {"name": "Core Proxy Squadron", "swarms": [
+            {"name": "Translation Swarm", "agents": ["request-converter", "response-converter", "stream-bridge", "tool-mapper"]},
+            {"name": "Routing Swarm", "agents": ["provider-selector", "azure-deployment-resolver", "fallback-handler"]}
+          ]},
+          {"name": "Management Squadron", "swarms": [
+            {"name": "UX Swarm", "agents": ["menu-bar-app", "ccp-switcher-tui", "ccp-litellm-cli"]},
+            {"name": "Lifecycle Swarm", "agents": ["launchagent-proxy", "launchagent-menubar"]}
+          ]},
+          {"name": "Security Squadron", "swarms": [
+            {"name": "Supply Chain Swarm", "agents": ["version-pinner", "policy-doc", "audit-checker"]}
+          ]}
+        ]
+      },
+      "deployment": {"host": "localhost", "port": 8082, "process_manager": "launchd via com.ccp.litellm.proxy.plist", "log_path": "/tmp/ccp-server.log"},
+      "testing": {
+        "unit_tests": ["test_azure_fallback.py", "test_anthropic_404_fallback.py", "test_opus_frontier_mapping.py"],
+        "integration_tests": "tests.py (28KB)",
+        "manual_qa": "ccp-litellm troubleshoot, menu bar live status"
+      },
+      "phases_completed": ["discover", "define", "plan", "execute"]
+    }
+  }
+}

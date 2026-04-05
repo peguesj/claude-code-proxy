@@ -39,9 +39,10 @@ A proxy server that lets you use Anthropic clients with Gemini, OpenAI, or Anthr
    ```
    Edit `.env` and fill in your API keys and model configurations:
 
-   *   `ANTHROPIC_API_KEY`: (Optional) Needed only if proxying *to* Anthropic models.
+   *   `ANTHROPIC_API_KEY`: (Optional) Needed only if proxying *to* Anthropic models. If not provided, the proxy can fall back to other configured providers.
    *   `OPENAI_API_KEY`: Your OpenAI API key (Required if using the default OpenAI preference or as fallback).
    *   `GEMINI_API_KEY`: Your Google AI Studio (Gemini) API key (Required if `PREFERRED_PROVIDER=google` and `USE_VERTEX_AUTH=true`).
+   *   `AZURE_API_KEY` / `AZURE_API_BASE` (Optional): If `ANTHROPIC_API_KEY` is not set and `AZURE_API_KEY` is configured, the proxy will automatically fall back to Azure OpenAI for Anthropic-like requests (e.g., `claude-3-sonnet-...` -> mapped to an Azure deployment).
    *   `USE_VERTEX_AUTH` (Optional): Set to `true` to use Application Default Credentials (ADC) will be used (no static API key required). Note: when USE_VERTEX_AUTH=true, you must configure `VERTEX_PROJECT` and `VERTEX_LOCATION`.
    *   `VERTEX_PROJECT` (Optional): Your Google Cloud Project ID (Required if `PREFERRED_PROVIDER=google` and `USE_VERTEX_AUTH=true`).
    *   `VERTEX_LOCATION` (Optional): The Google Cloud region for Vertex AI (e.g., `us-central1`) (Required if `PREFERRED_PROVIDER=google` and `USE_VERTEX_AUTH=true`).
@@ -205,6 +206,56 @@ This proxy works by:
 5. **Returning** the formatted response to the client ✅
 
 The proxy handles both streaming and non-streaming responses, maintaining compatibility with all Claude clients. 🌊
+
+## Management Tools
+
+This fork ships a macOS management suite for running the proxy as a background service.
+
+### CLI — `ccp-litellm`
+
+Installed at `~/.local/bin/ccp-litellm`:
+
+```bash
+ccp-litellm start         # nohup uvicorn on :8082, logs to /tmp/ccp-server.log
+ccp-litellm stop          # SIGTERM then SIGKILL
+ccp-litellm restart
+ccp-litellm status        # running state, PID, provider, model mapping
+ccp-litellm log [-f]      # tail /tmp/ccp-server.log
+ccp-litellm troubleshoot  # port/dep/env/HTTP health diagnostics
+```
+
+Also invokable as the `/ccp-litellm` Claude Code slash command.
+
+### Menu Bar App — CCP LiteLLM.app
+
+Build + install with:
+
+```bash
+bash build-menubar.sh
+```
+
+Provides:
+
+- **Live status icon** — green/red/amber indicator, polls `http://localhost:8082/` every 5s
+- **Start / Stop / Restart** — control the proxy from the menu bar
+- **Provider submenu** — switch `PREFERRED_PROVIDER` between azure / openai / google / anthropic
+- **Presets submenu** — 8 curated BIG/SMALL/FRONTIER model tuples (Best Performance, Best Reasoning, Balanced, Cost Efficient, Speed, Coding, OpenAI Direct, 2026 Best Overall)
+- **Settings window (⌘,)** — edit every `.env` variable with atomic patching that preserves comments + ordering
+- **Model Manager (⌘M)** — browse live deployments/catalogs across Azure, OpenAI, Anthropic, and Google; deploy new Azure models with SKU + capacity; promote any result to BIG / SMALL / FRONTIER with one click
+- **Login-item toggles** — manage `com.ccp.litellm.proxy` and `com.ccp.litellm.menubar` LaunchAgents
+- **Troubleshoot sheet** — runs full diagnostics inline
+
+### Model Switcher TUI
+
+`./ccp-switcher` — interactive bash TUI for changing BIG/SMALL/FRONTIER model mappings.
+
+### Azure Fallback
+
+When `PREFERRED_PROVIDER=anthropic` and a request 404s on Anthropic's upstream, the proxy retries once against Azure OpenAI using the configured `AZURE_*` env vars. Controlled by a `_retried_with_azure` flag to prevent loops.
+
+## Security: LiteLLM Supply Chain Policy
+
+`pyproject.toml` pins `litellm>=1.77.7,<1.82.0`. Versions **1.82.7** and **1.82.8** are banned (malicious credential-stealing code, TeamPCP attack, March 2026). CVE-2024-6825 and CVE-2024-8984 are mitigated by the lower bound. See `.claude/CLAUDE.md` for the full policy and remediation checklist.
 
 ## Contributing 🤝
 

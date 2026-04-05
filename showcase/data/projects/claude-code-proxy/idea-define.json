@@ -1,0 +1,28 @@
+{
+  "phase": "define",
+  "project": "claude-code-proxy",
+  "generated_at": "2026-04-05T00:00:00Z",
+  "problem_statement": "Claude Code and other Anthropic-SDK clients are hardwired to the Anthropic API surface, but developers often need to route to Azure OpenAI, OpenAI, Gemini, or self-hosted models without rewriting tooling. A drop-in Anthropic-compatible gateway is required.",
+  "personas": [
+    {"name": "Enterprise Claude Code Developer", "role": "Staff engineer", "need": "Azure OpenAI compliance", "pain": "Claude Code speaks only to api.anthropic.com"},
+    {"name": "Multi-Provider Power User", "role": "Indie developer", "need": "Switch models per task", "pain": "Different SDKs per provider"},
+    {"name": "Security-Conscious Operator", "role": "Platform/SRE", "need": "Audited dep chain", "pain": "Active LiteLLM supply-chain attacks"}
+  ],
+  "positioning": "For Claude Code users needing backend flexibility, CCP is a local Anthropic-API-compatible gateway routing to Azure/OpenAI/Gemini/Anthropic via LiteLLM, preserving streaming, tool-use and multi-modal while pinning LiteLLM to a safe range.",
+  "jtbd": {
+    "functional": ["Route Anthropic requests to any backend", "Map haiku/sonnet/opus tiers to deployments", "Preserve streaming+tool-use", "Graceful fallback"],
+    "emotional": ["Credential safety", "Frictionless switching"],
+    "social": ["Enable Azure-only orgs", "Cost-conscious Gemini adoption"]
+  },
+  "market_size": {
+    "value": "Internal single-user tool; ~10k Claude Code users globally would benefit",
+    "segment": "Developer tools / AI gateways"
+  },
+  "hypotheses": [
+    {"id": "H1", "statement": "1:1 Anthropic<->LiteLLM translation preserves streaming+tool-use", "status": "validated"},
+    {"id": "H2", "statement": "Tier-name remapping gives stable mental model", "status": "validated"},
+    {"id": "H3", "statement": "Azure fallback improves UX", "status": "validated"},
+    {"id": "H4", "statement": "Menu bar app lowers switching cost", "status": "validated"},
+    {"id": "H5", "statement": "Pinning <1.82.0 mitigates supply-chain attack", "status": "validated"}
+  ]
+}

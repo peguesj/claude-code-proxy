@@ -1,0 +1,64 @@
+{
+  "waves": [
+    {
+      "id": "w1",
+      "title": "Wave 1 — Proxy Core",
+      "color": "emerald",
+      "features": [
+        {"id": "f1", "name": "FastAPI /v1/messages endpoint", "status": "DONE", "tags": ["api", "fastapi"]},
+        {"id": "f2", "name": "Anthropic→LiteLLM request converter", "status": "DONE", "tags": ["translate"]},
+        {"id": "f3", "name": "LiteLLM→Anthropic response converter", "status": "DONE", "tags": ["translate"]},
+        {"id": "f4", "name": "SSE streaming passthrough", "status": "DONE", "tags": ["streaming"]},
+        {"id": "f5", "name": "Port 8082 uvicorn reload", "status": "DONE", "tags": ["server"]}
+      ]
+    },
+    {
+      "id": "w2",
+      "title": "Wave 2 — Multi-Provider Routing",
+      "color": "blue",
+      "features": [
+        {"id": "f6", "name": "Azure OpenAI provider (primary)", "status": "DONE", "tags": ["azure"]},
+        {"id": "f7", "name": "OpenAI direct provider", "status": "DONE", "tags": ["openai"]},
+        {"id": "f8", "name": "Google Gemini provider", "status": "DONE", "tags": ["google"]},
+        {"id": "f9", "name": "Anthropic passthrough", "status": "DONE", "tags": ["anthropic"]},
+        {"id": "f10", "name": "BIG/SMALL/FRONTIER tier mapping", "status": "DONE", "tags": ["routing"]}
+      ]
+    },
+    {
+      "id": "w3",
+      "title": "Wave 3 — Azure Integration",
+      "color": "purple",
+      "features": [
+        {"id": "f11", "name": "AZURE_DEPLOYMENT_MAP (22 deployments)", "status": "DONE", "tags": ["azure", "config"]},
+        {"id": "f12", "name": "sonnet→gpt-4.1 mapping", "status": "DONE", "tags": ["mapping"]},
+        {"id": "f13", "name": "haiku→gpt-4o mapping", "status": "DONE", "tags": ["mapping"]},
+        {"id": "f14", "name": "opus→gpt-5.2 frontier mapping", "status": "DONE", "tags": ["mapping"]},
+        {"id": "f15", "name": "Azure 404 fallback (one-shot)", "status": "DONE", "tags": ["fallback"]}
+      ]
+    },
+    {
+      "id": "w4",
+      "title": "Wave 4 — Management Tools",
+      "color": "amber",
+      "features": [
+        {"id": "f16", "name": "ccp-litellm CLI (start/stop/status)", "status": "DONE", "tags": ["cli"]},
+        {"id": "f17", "name": "Swift menu bar Model Manager", "status": "DONE", "tags": ["macos", "swift"]},
+        {"id": "f18", "name": "ccp-switcher TUI", "status": "DONE", "tags": ["tui", "bash"]},
+        {"id": "f19", "name": "LaunchAgents (proxy + menubar)", "status": "DONE", "tags": ["launchd"]},
+        {"id": "f20", "name": "Live health polling (:8082/)", "status": "DONE", "tags": ["health"]}
+      ]
+    },
+    {
+      "id": "w5",
+      "title": "Wave 5 — Security & Hardening",
+      "color": "red",
+      "features": [
+        {"id": "f21", "name": "LiteLLM version pin <1.82.0", "status": "DONE", "tags": ["security", "sbom"]},
+        {"id": "f22", "name": "Supply-chain vuln policy doc", "status": "DONE", "tags": ["policy"]},
+        {"id": "f23", "name": "CVE-2024-6825/8984 mitigation", "status": "DONE", "tags": ["cve"]},
+        {"id": "f24", "name": "PROXY_API_KEY client auth", "status": "DONE", "tags": ["auth"]},
+        {"id": "f25", "name": "Azure fallback retry loop guard", "status": "ACTIVE", "tags": ["resilience"]}
+      ]
+    }
+  ]
+}
