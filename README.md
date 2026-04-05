@@ -207,6 +207,56 @@ This proxy works by:
 
 The proxy handles both streaming and non-streaming responses, maintaining compatibility with all Claude clients. 🌊
 
+## Management Tools
+
+This fork ships a macOS management suite for running the proxy as a background service.
+
+### CLI — `ccp-litellm`
+
+Installed at `~/.local/bin/ccp-litellm`:
+
+```bash
+ccp-litellm start         # nohup uvicorn on :8082, logs to /tmp/ccp-server.log
+ccp-litellm stop          # SIGTERM then SIGKILL
+ccp-litellm restart
+ccp-litellm status        # running state, PID, provider, model mapping
+ccp-litellm log [-f]      # tail /tmp/ccp-server.log
+ccp-litellm troubleshoot  # port/dep/env/HTTP health diagnostics
+```
+
+Also invokable as the `/ccp-litellm` Claude Code slash command.
+
+### Menu Bar App — CCP LiteLLM.app
+
+Build + install with:
+
+```bash
+bash build-menubar.sh
+```
+
+Provides:
+
+- **Live status icon** — green/red/amber indicator, polls `http://localhost:8082/` every 5s
+- **Start / Stop / Restart** — control the proxy from the menu bar
+- **Provider submenu** — switch `PREFERRED_PROVIDER` between azure / openai / google / anthropic
+- **Presets submenu** — 8 curated BIG/SMALL/FRONTIER model tuples (Best Performance, Best Reasoning, Balanced, Cost Efficient, Speed, Coding, OpenAI Direct, 2026 Best Overall)
+- **Settings window (⌘,)** — edit every `.env` variable with atomic patching that preserves comments + ordering
+- **Model Manager (⌘M)** — browse live deployments/catalogs across Azure, OpenAI, Anthropic, and Google; deploy new Azure models with SKU + capacity; promote any result to BIG / SMALL / FRONTIER with one click
+- **Login-item toggles** — manage `com.ccp.litellm.proxy` and `com.ccp.litellm.menubar` LaunchAgents
+- **Troubleshoot sheet** — runs full diagnostics inline
+
+### Model Switcher TUI
+
+`./ccp-switcher` — interactive bash TUI for changing BIG/SMALL/FRONTIER model mappings.
+
+### Azure Fallback
+
+When `PREFERRED_PROVIDER=anthropic` and a request 404s on Anthropic's upstream, the proxy retries once against Azure OpenAI using the configured `AZURE_*` env vars. Controlled by a `_retried_with_azure` flag to prevent loops.
+
+## Security: LiteLLM Supply Chain Policy
+
+`pyproject.toml` pins `litellm>=1.77.7,<1.82.0`. Versions **1.82.7** and **1.82.8** are banned (malicious credential-stealing code, TeamPCP attack, March 2026). CVE-2024-6825 and CVE-2024-8984 are mitigated by the lower bound. See `.claude/CLAUDE.md` for the full policy and remediation checklist.
+
 ## Contributing 🤝
 
 Contributions are welcome! Please feel free to submit a Pull Request. 🎁
