@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SWIFT_SRC="$SCRIPT_DIR/CcpMenuBar.swift"
+SWIFT_SRCS=("$SCRIPT_DIR/CcpMenuBar.swift" "$SCRIPT_DIR/CcpModels.swift")
 BINARY_NAME="CcpMenuBar"
 APP_DIR="$HOME/Applications/CCP LiteLLM.app"
 APP_MACOS="$APP_DIR/Contents/MacOS"
@@ -29,7 +29,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # 1. Compile Swift
 # ---------------------------------------------------------------------------
-echo "▸ Compiling $SWIFT_SRC ..."
+echo "▸ Compiling Swift sources: ${SWIFT_SRCS[*]##*/} ..."
 
 if ! command -v swiftc &>/dev/null; then
     echo "  ERROR: swiftc not found. Install Xcode Command Line Tools:"
@@ -42,7 +42,7 @@ swiftc \
     -framework Cocoa \
     -O \
     -module-name CcpMenuBar \
-    "$SWIFT_SRC" \
+    "${SWIFT_SRCS[@]}" \
     -o "$SWIFTC_TMP"
 
 echo "  OK: compiled → $SWIFTC_TMP"

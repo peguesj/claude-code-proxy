@@ -15,11 +15,112 @@ let LOG_FILE   = "/tmp/ccp-server.log"
 let ENV_FILE   = CCP_DIR + "/.env"
 let PORT       = 8082
 let HEALTH_URL = "http://localhost:\(PORT)/"
+let APP_VERSION = "1.1.0"
 
 let PROXY_PLIST    = NSHomeDirectory() + "/Library/LaunchAgents/com.ccp.litellm.proxy.plist"
-let MENUBAR_PLIST   = NSHomeDirectory() + "/Library/LaunchAgents/com.ccp.litellm.menubar.plist"
+let MENUBAR_PLIST  = NSHomeDirectory() + "/Library/LaunchAgents/com.ccp.litellm.menubar.plist"
 let PROXY_LABEL    = "com.ccp.litellm.proxy"
-let MENUBAR_LABEL   = "com.ccp.litellm.menubar"
+let MENUBAR_LABEL  = "com.ccp.litellm.menubar"
+
+// MARK: Providers + Presets
+
+let PROVIDERS = ["azure", "openai", "google", "anthropic"]
+
+struct Preset {
+    let name: String
+    let provider: String
+    let big: String
+    let small: String
+    let frontier: String
+}
+
+let PRESETS: [Preset] = [
+    Preset(name: "Best Performance",  provider: "azure",  big: "gpt-4.1",       small: "gpt-4o",         frontier: "gpt-5.2"),
+    Preset(name: "Best Reasoning",    provider: "azure",  big: "gpt-4.1",       small: "o4-mini",        frontier: "o3"),
+    Preset(name: "Balanced",          provider: "azure",  big: "gpt-4o",        small: "o4-mini",        frontier: "gpt-5.2"),
+    Preset(name: "Cost Efficient",    provider: "azure",  big: "o4-mini",       small: "gpt-4.1-mini",   frontier: "gpt-5"),
+    Preset(name: "Speed",             provider: "azure",  big: "gpt-4o",        small: "gpt-4.1-mini",   frontier: "gpt-5"),
+    Preset(name: "Coding",            provider: "azure",  big: "gpt-4.1",       small: "o4-mini",        frontier: "gpt-5.2-codex"),
+    Preset(name: "OpenAI Direct",     provider: "openai", big: "gpt-4.1",       small: "gpt-4.1-mini",   frontier: "gpt-5.2"),
+    Preset(name: "2026 Best Overall", provider: "azure",  big: "gpt-5.2-codex", small: "gpt-5.2-chat",   frontier: "gpt-5.2"),
+]
+
+// ---------------------------------------------------------------------------
+// MARK: - EnvFileManager
+// ---------------------------------------------------------------------------
+
+final class EnvFileManager {
+    static let shared = EnvFileManager()
+    private let path = ENV_FILE
+
+    func read() -> String {
+        (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+    }
+
+    func get(_ key: String) -> String? {
+        for line in read().components(separatedBy: .newlines) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            guard !t.hasPrefix("#"), t.hasPrefix("\(key)=") else { continue }
+            var v = String(t.dropFirst(key.count + 1))
+            v = v.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            return v.isEmpty ? nil : v
+        }
+        return nil
+    }
+
+    /// Patch one or more key=value pairs, preserving comments + order.
+    /// Keys not present are appended at the end.
+    @discardableResult
+    func patch(_ updates: [String: String?]) -> Bool {
+        var content = read()
+        if content.isEmpty, FileManager.default.fileExists(atPath: path) == false {
+            // create empty file
+        }
+        var lines = content.components(separatedBy: "\n")
+        var remaining = updates
+
+        for (i, line) in lines.enumerated() {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("#") || t.isEmpty { continue }
+            guard let eq = t.firstIndex(of: "=") else { continue }
+            let key = String(t[..<eq])
+            if let val = remaining[key] {
+                if let v = val {
+                    // quote if contains spaces or special chars
+                    let quoted = needsQuoting(v) ? "\"\(escape(v))\"" : v
+                    lines[i] = "\(key)=\(quoted)"
+                } else {
+                    // remove by commenting out
+                    lines[i] = "# \(line)"
+                }
+                remaining.removeValue(forKey: key)
+            }
+        }
+
+        // Append keys that weren't found
+        for (key, val) in remaining {
+            guard let v = val else { continue }
+            let quoted = needsQuoting(v) ? "\"\(escape(v))\"" : v
+            lines.append("\(key)=\(quoted)")
+        }
+
+        content = lines.joined(separator: "\n")
+        do {
+            try content.write(toFile: path, atomically: true, encoding: .utf8)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func needsQuoting(_ s: String) -> Bool {
+        s.contains(" ") || s.contains("#") || s.contains("\"") || s.contains("{") || s.contains("}")
+    }
+
+    private func escape(_ s: String) -> String {
+        s.replacingOccurrences(of: "\"", with: "\\\"")
+    }
+}
 
 // ---------------------------------------------------------------------------
 // MARK: - ProxyStatus
@@ -27,6 +128,239 @@ let MENUBAR_LABEL   = "com.ccp.litellm.menubar"
 
 enum ProxyStatus: Equatable {
     case running, stopped, unknown
+}
+
+// ---------------------------------------------------------------------------
+// MARK: - SettingsWindowController
+// ---------------------------------------------------------------------------
+
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
+
+    var providerPopup: NSPopUpButton!
+    var bigField: NSTextField!
+    var smallField: NSTextField!
+    var frontierField: NSTextField!
+    var proxyKeyField: NSSecureTextField!
+    var azureKeyField: NSSecureTextField!
+    var azureBaseField: NSTextField!
+    var azureVersionField: NSTextField!
+    var azureSubField: NSTextField!
+    var azureRgField: NSTextField!
+    var azureAccountField: NSTextField!
+    var openaiKeyField: NSSecureTextField!
+    var anthropicKeyField: NSSecureTextField!
+    var geminiKeyField: NSSecureTextField!
+    var restartOnSave: NSButton!
+
+    var onSave: (() -> Void)?
+
+    convenience init() {
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 780),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered, defer: false
+        )
+        w.title = "CCP LiteLLM — Settings"
+        w.center()
+        self.init(window: w)
+        w.delegate = self
+        buildUI()
+        loadValues()
+    }
+
+    private func buildUI() {
+        guard let content = window?.contentView else { return }
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: content.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+        ])
+
+        stack.addArrangedSubview(sectionHeader("Provider & Models"))
+
+        providerPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        providerPopup.addItems(withTitles: PROVIDERS)
+        stack.addArrangedSubview(labeled("Preferred Provider", control: providerPopup, width: 200))
+
+        bigField = textField()
+        stack.addArrangedSubview(labeled("BIG_MODEL (sonnet →)", control: bigField))
+
+        smallField = textField()
+        stack.addArrangedSubview(labeled("SMALL_MODEL (haiku →)", control: smallField))
+
+        frontierField = textField()
+        stack.addArrangedSubview(labeled("FRONTIER_MODEL (opus →)", control: frontierField))
+
+        stack.addArrangedSubview(spacer(8))
+        stack.addArrangedSubview(sectionHeader("Proxy Auth"))
+
+        proxyKeyField = secureField()
+        stack.addArrangedSubview(labeled("PROXY_API_KEY (optional client key)", control: proxyKeyField))
+
+        stack.addArrangedSubview(spacer(8))
+        stack.addArrangedSubview(sectionHeader("Azure OpenAI"))
+
+        azureKeyField = secureField()
+        stack.addArrangedSubview(labeled("AZURE_API_KEY", control: azureKeyField))
+
+        azureBaseField = textField()
+        stack.addArrangedSubview(labeled("AZURE_API_BASE", control: azureBaseField))
+
+        azureVersionField = textField()
+        stack.addArrangedSubview(labeled("AZURE_API_VERSION", control: azureVersionField))
+
+        stack.addArrangedSubview(spacer(6))
+        stack.addArrangedSubview(sectionHeader("Azure Resource Context (for model deployment)"))
+
+        azureSubField = textField()
+        stack.addArrangedSubview(labeled("AZURE_SUBSCRIPTION_ID", control: azureSubField))
+
+        azureRgField = textField()
+        stack.addArrangedSubview(labeled("AZURE_RESOURCE_GROUP", control: azureRgField))
+
+        azureAccountField = textField()
+        stack.addArrangedSubview(labeled("AZURE_ACCOUNT_NAME (Cognitive Services account)", control: azureAccountField))
+
+        stack.addArrangedSubview(spacer(8))
+        stack.addArrangedSubview(sectionHeader("Other Backend Keys"))
+
+        openaiKeyField = secureField()
+        stack.addArrangedSubview(labeled("OPENAI_API_KEY", control: openaiKeyField))
+
+        anthropicKeyField = secureField()
+        stack.addArrangedSubview(labeled("ANTHROPIC_API_KEY", control: anthropicKeyField))
+
+        geminiKeyField = secureField()
+        stack.addArrangedSubview(labeled("GEMINI_API_KEY", control: geminiKeyField))
+
+        stack.addArrangedSubview(spacer(12))
+
+        restartOnSave = NSButton(checkboxWithTitle: "Restart proxy after save", target: nil, action: nil)
+        restartOnSave.state = .on
+        stack.addArrangedSubview(restartOnSave)
+
+        // Buttons
+        let buttons = NSStackView()
+        buttons.orientation = .horizontal
+        buttons.spacing = 8
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
+        cancel.bezelStyle = .rounded
+        cancel.keyEquivalent = "\u{1b}"
+        let save = NSButton(title: "Save", target: self, action: #selector(save))
+        save.bezelStyle = .rounded
+        save.keyEquivalent = "\r"
+        buttons.addArrangedSubview(cancel)
+        buttons.addArrangedSubview(save)
+        stack.addArrangedSubview(buttons)
+    }
+
+    private func sectionHeader(_ text: String) -> NSTextField {
+        let l = NSTextField(labelWithString: text)
+        l.font = NSFont.boldSystemFont(ofSize: 12)
+        l.textColor = .secondaryLabelColor
+        return l
+    }
+
+    private func labeled(_ title: String, control: NSView, width: CGFloat = 380) -> NSView {
+        let row = NSStackView()
+        row.orientation = .vertical
+        row.alignment = .leading
+        row.spacing = 2
+        let l = NSTextField(labelWithString: title)
+        l.font = NSFont.systemFont(ofSize: 11)
+        l.textColor = .secondaryLabelColor
+        row.addArrangedSubview(l)
+        row.addArrangedSubview(control)
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return row
+    }
+
+    private func textField() -> NSTextField {
+        let f = NSTextField()
+        f.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        return f
+    }
+
+    private func secureField() -> NSSecureTextField {
+        let f = NSSecureTextField()
+        f.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        return f
+    }
+
+    private func spacer(_ h: CGFloat) -> NSView {
+        let v = NSView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.heightAnchor.constraint(equalToConstant: h).isActive = true
+        return v
+    }
+
+    private func loadValues() {
+        let env = EnvFileManager.shared
+        let prov = env.get("PREFERRED_PROVIDER") ?? "azure"
+        if let idx = PROVIDERS.firstIndex(of: prov) {
+            providerPopup.selectItem(at: idx)
+        }
+        bigField.stringValue       = env.get("BIG_MODEL") ?? ""
+        smallField.stringValue     = env.get("SMALL_MODEL") ?? ""
+        frontierField.stringValue  = env.get("FRONTIER_MODEL") ?? ""
+        proxyKeyField.stringValue  = env.get("PROXY_API_KEY") ?? ""
+        azureKeyField.stringValue  = env.get("AZURE_API_KEY") ?? ""
+        azureBaseField.stringValue = env.get("AZURE_API_BASE") ?? ""
+        azureVersionField.stringValue = env.get("AZURE_API_VERSION") ?? ""
+        azureSubField.stringValue = env.get("AZURE_SUBSCRIPTION_ID") ?? ""
+        azureRgField.stringValue = env.get("AZURE_RESOURCE_GROUP") ?? ""
+        azureAccountField.stringValue = env.get("AZURE_ACCOUNT_NAME") ?? ""
+        openaiKeyField.stringValue = env.get("OPENAI_API_KEY") ?? ""
+        anthropicKeyField.stringValue = env.get("ANTHROPIC_API_KEY") ?? ""
+        geminiKeyField.stringValue = env.get("GEMINI_API_KEY") ?? ""
+    }
+
+    @objc private func cancel() {
+        window?.performClose(nil)
+    }
+
+    @objc private func save() {
+        let updates: [String: String?] = [
+            "PREFERRED_PROVIDER":  providerPopup.titleOfSelectedItem,
+            "BIG_MODEL":           bigField.stringValue.isEmpty ? nil : bigField.stringValue,
+            "SMALL_MODEL":         smallField.stringValue.isEmpty ? nil : smallField.stringValue,
+            "FRONTIER_MODEL":      frontierField.stringValue.isEmpty ? nil : frontierField.stringValue,
+            "PROXY_API_KEY":       proxyKeyField.stringValue.isEmpty ? nil : proxyKeyField.stringValue,
+            "AZURE_API_KEY":       azureKeyField.stringValue.isEmpty ? nil : azureKeyField.stringValue,
+            "AZURE_API_BASE":      azureBaseField.stringValue.isEmpty ? nil : azureBaseField.stringValue,
+            "AZURE_API_VERSION":   azureVersionField.stringValue.isEmpty ? nil : azureVersionField.stringValue,
+            "AZURE_SUBSCRIPTION_ID": azureSubField.stringValue.isEmpty ? nil : azureSubField.stringValue,
+            "AZURE_RESOURCE_GROUP": azureRgField.stringValue.isEmpty ? nil : azureRgField.stringValue,
+            "AZURE_ACCOUNT_NAME":   azureAccountField.stringValue.isEmpty ? nil : azureAccountField.stringValue,
+            "OPENAI_API_KEY":      openaiKeyField.stringValue.isEmpty ? nil : openaiKeyField.stringValue,
+            "ANTHROPIC_API_KEY":   anthropicKeyField.stringValue.isEmpty ? nil : anthropicKeyField.stringValue,
+            "GEMINI_API_KEY":      geminiKeyField.stringValue.isEmpty ? nil : geminiKeyField.stringValue,
+        ]
+
+        if EnvFileManager.shared.patch(updates) {
+            let shouldRestart = (restartOnSave.state == .on)
+            window?.performClose(nil)
+            onSave?()
+            if shouldRestart {
+                NotificationCenter.default.post(name: .init("CcpShouldRestart"), object: nil)
+            }
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "Failed to save settings"
+            alert.informativeText = "Could not write to \(ENV_FILE)"
+            alert.runModal()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -47,17 +381,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var restartItem: NSMenuItem!
     var proxyAtLoginItem: NSMenuItem!
     var menubarAtLoginItem: NSMenuItem!
+    var providerSubmenu: NSMenu!
+    var presetsSubmenu: NSMenu!
+
+    var settingsWC: SettingsWindowController?
+    var modelsWC: ModelsWindowController?
 
     // MARK: Launch
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Hide from Dock
         NSApp.setActivationPolicy(.accessory)
-
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         applyStatusIcon(.unknown)
         buildMenu()
         startHealthCheck()
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleShouldRestart),
+            name: .init("CcpShouldRestart"), object: nil
+        )
+    }
+
+    @objc func handleShouldRestart() {
+        restartProxy()
     }
 
     // MARK: - Status Icon
@@ -101,102 +447,146 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // -- Status header (updated dynamically)
+        // Status header
         statusMenuItem = NSMenuItem(title: "Checking…", action: nil, keyEquivalent: "")
         statusMenuItem.isEnabled = false
         menu.addItem(statusMenuItem)
 
-        // -- Model config (updated dynamically)
-        modelMenuItem = NSMenuItem(title: loadModelSummary(), action: nil, keyEquivalent: "")
-        modelMenuItem.isEnabled = false
+        // Model config — clickable to open settings
+        modelMenuItem = NSMenuItem(title: loadModelSummary(),
+                                   action: #selector(openSettings),
+                                   keyEquivalent: "")
+        modelMenuItem.target = self
         menu.addItem(modelMenuItem)
 
         menu.addItem(.separator())
 
-        // -- Proxy controls
+        // Proxy controls
         startItem = NSMenuItem(title: "Start Proxy",
-                               action: #selector(startProxy),
-                               keyEquivalent: "")
+                               action: #selector(startProxy), keyEquivalent: "")
         startItem.target = self
-        startItem.isEnabled = true
         menu.addItem(startItem)
 
         stopItem = NSMenuItem(title: "Stop Proxy",
-                              action: #selector(stopProxy),
-                              keyEquivalent: "")
+                              action: #selector(stopProxy), keyEquivalent: "")
         stopItem.target = self
         stopItem.isEnabled = false
         menu.addItem(stopItem)
 
         restartItem = NSMenuItem(title: "Restart Proxy",
-                                 action: #selector(restartProxy),
-                                 keyEquivalent: "r")
+                                 action: #selector(restartProxy), keyEquivalent: "r")
         restartItem.target = self
-        restartItem.isEnabled = true
         menu.addItem(restartItem)
 
         menu.addItem(.separator())
 
-        // -- Log & switcher
-        let copyItem = NSMenuItem(title: "Copy Client Setup",
-                                   action: #selector(copyClientSetup),
-                                   keyEquivalent: "c")
-        copyItem.target = self
-        copyItem.isEnabled = true
-        menu.addItem(copyItem)
+        // Provider submenu
+        let providerMenu = NSMenuItem(title: "Provider", action: nil, keyEquivalent: "")
+        providerSubmenu = NSMenu()
+        for p in PROVIDERS {
+            let item = NSMenuItem(title: p, action: #selector(selectProvider(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = p
+            providerSubmenu.addItem(item)
+        }
+        providerMenu.submenu = providerSubmenu
+        menu.addItem(providerMenu)
+        refreshProviderCheckmarks()
 
-        let logItem = NSMenuItem(title: "View Log",
-                                 action: #selector(viewLog),
-                                 keyEquivalent: "l")
-        logItem.target = self
-        logItem.isEnabled = true
-        menu.addItem(logItem)
+        // Presets submenu
+        let presetsMenu = NSMenuItem(title: "Presets", action: nil, keyEquivalent: "")
+        presetsSubmenu = NSMenu()
+        for (i, preset) in PRESETS.enumerated() {
+            let title = "\(preset.name)  —  \(preset.provider): \(preset.frontier)/\(preset.big)/\(preset.small)"
+            let item = NSMenuItem(title: title, action: #selector(applyPreset(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            presetsSubmenu.addItem(item)
+        }
+        presetsMenu.submenu = presetsSubmenu
+        menu.addItem(presetsMenu)
 
-        let switcherItem = NSMenuItem(title: "Open Model Switcher",
-                                      action: #selector(openSwitcher),
-                                      keyEquivalent: "")
-        switcherItem.target = self
-        switcherItem.isEnabled = true
-        menu.addItem(switcherItem)
+        // Settings
+        let settingsItem = NSMenuItem(title: "Settings…",
+                                      action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+
+        let modelsItem = NSMenuItem(title: "Manage Models…",
+                                    action: #selector(openModels), keyEquivalent: "m")
+        modelsItem.target = self
+        menu.addItem(modelsItem)
+
+        let editEnvItem = NSMenuItem(title: "Edit .env…",
+                                     action: #selector(editEnv), keyEquivalent: "")
+        editEnvItem.target = self
+        menu.addItem(editEnvItem)
 
         menu.addItem(.separator())
 
-        // -- Login toggles
+        // Client + log
+        let copyItem = NSMenuItem(title: "Copy Client Setup",
+                                  action: #selector(copyClientSetup), keyEquivalent: "c")
+        copyItem.target = self
+        menu.addItem(copyItem)
+
+        let logItem = NSMenuItem(title: "View Log",
+                                 action: #selector(viewLog), keyEquivalent: "l")
+        logItem.target = self
+        menu.addItem(logItem)
+
+        let switcherItem = NSMenuItem(title: "Open Model Switcher (TUI)",
+                                      action: #selector(openSwitcher), keyEquivalent: "")
+        switcherItem.target = self
+        menu.addItem(switcherItem)
+
+        let revealItem = NSMenuItem(title: "Reveal Project in Finder",
+                                    action: #selector(revealInFinder), keyEquivalent: "")
+        revealItem.target = self
+        menu.addItem(revealItem)
+
+        menu.addItem(.separator())
+
+        // Login toggles
         proxyAtLoginItem = NSMenuItem(title: "Start Proxy at Login",
-                                       action: #selector(toggleProxyAtLogin),
-                                       keyEquivalent: "")
+                                      action: #selector(toggleProxyAtLogin), keyEquivalent: "")
         proxyAtLoginItem.target = self
-        proxyAtLoginItem.isEnabled = true
         proxyAtLoginItem.state = isLaunchAgentLoaded(label: PROXY_LABEL) ? .on : .off
         menu.addItem(proxyAtLoginItem)
 
         menubarAtLoginItem = NSMenuItem(title: "Start Menu Bar at Login",
-                                         action: #selector(toggleMenuBarAtLogin),
-                                         keyEquivalent: "")
+                                        action: #selector(toggleMenuBarAtLogin), keyEquivalent: "")
         menubarAtLoginItem.target = self
-        menubarAtLoginItem.isEnabled = true
         menubarAtLoginItem.state = isLaunchAgentLoaded(label: MENUBAR_LABEL) ? .on : .off
         menu.addItem(menubarAtLoginItem)
 
         menu.addItem(.separator())
 
-        // -- Troubleshoot
+        // Troubleshoot + About
         let troubleshootItem = NSMenuItem(title: "Troubleshoot…",
-                                           action: #selector(runTroubleshoot),
-                                           keyEquivalent: "")
+                                          action: #selector(runTroubleshoot), keyEquivalent: "")
         troubleshootItem.target = self
-        troubleshootItem.isEnabled = true
         menu.addItem(troubleshootItem)
+
+        let aboutItem = NSMenuItem(title: "About CCP LiteLLM",
+                                   action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
+        menu.addItem(aboutItem)
 
         menu.addItem(.separator())
 
-        // -- Quit
-        let quitItem = NSMenuItem(title: "Quit CCP Monitor",
-                                   action: #selector(NSApplication.terminate(_:)),
-                                   keyEquivalent: "q")
-        menu.addItem(quitItem)
+        menu.addItem(NSMenuItem(title: "Quit CCP Monitor",
+                                action: #selector(NSApplication.terminate(_:)),
+                                keyEquivalent: "q"))
 
         statusItem.menu = menu
+    }
+
+    func refreshProviderCheckmarks() {
+        let current = EnvFileManager.shared.get("PREFERRED_PROVIDER") ?? "azure"
+        for item in providerSubmenu.items {
+            item.state = (item.representedObject as? String == current) ? .on : .off
+        }
     }
 
     // MARK: - Health Check
@@ -221,8 +611,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applyUpdate(_ status: ProxyStatus) {
-        // Always refresh model display
         modelMenuItem?.title = loadModelSummary()
+        refreshProviderCheckmarks()
 
         guard status != currentStatus else { return }
         currentStatus = status
@@ -302,20 +692,100 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Provider + Presets
+
+    @objc func selectProvider(_ sender: NSMenuItem) {
+        guard let prov = sender.representedObject as? String else { return }
+        EnvFileManager.shared.patch(["PREFERRED_PROVIDER": prov])
+        refreshProviderCheckmarks()
+        modelMenuItem?.title = loadModelSummary()
+        restartProxy()
+    }
+
+    @objc func applyPreset(_ sender: NSMenuItem) {
+        let idx = sender.tag
+        guard idx >= 0, idx < PRESETS.count else { return }
+        let p = PRESETS[idx]
+        EnvFileManager.shared.patch([
+            "PREFERRED_PROVIDER": p.provider,
+            "BIG_MODEL":          p.big,
+            "SMALL_MODEL":        p.small,
+            "FRONTIER_MODEL":     p.frontier,
+        ])
+        refreshProviderCheckmarks()
+        modelMenuItem?.title = loadModelSummary()
+        restartProxy()
+    }
+
+    // MARK: - Settings Window
+
+    @objc func openSettings() {
+        if settingsWC == nil {
+            settingsWC = SettingsWindowController()
+            settingsWC?.onSave = { [weak self] in
+                self?.refreshProviderCheckmarks()
+                self?.modelMenuItem?.title = self?.loadModelSummary() ?? ""
+            }
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWC?.showWindow(nil)
+    }
+
+    @objc func openModels() {
+        if modelsWC == nil {
+            modelsWC = ModelsWindowController()
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        modelsWC?.showWindow(nil)
+    }
+
+    @objc func editEnv() {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        proc.arguments = ["-t", ENV_FILE]
+        try? proc.run()
+    }
+
+    @objc func revealInFinder() {
+        NSWorkspace.shared.selectFile(ENV_FILE, inFileViewerRootedAtPath: CCP_DIR)
+    }
+
+    // MARK: - About
+
+    @objc func showAbout() {
+        let alert = NSAlert()
+        alert.messageText = "CCP LiteLLM Menu Bar"
+        alert.informativeText = """
+        Version \(APP_VERSION)
+
+        Claude Code Proxy manager for the FastAPI + LiteLLM server on port \(PORT).
+        Translates Anthropic API requests to Azure OpenAI / OpenAI / Google / Anthropic.
+
+        Project: \(CCP_DIR)
+        Log: \(LOG_FILE)
+        Health: \(HEALTH_URL)
+
+        CLI: ccp-litellm  •  Slash: /ccp-litellm
+        """
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Open Project")
+        let resp = alert.runModal()
+        if resp == .alertSecondButtonReturn {
+            revealInFinder()
+        }
+    }
+
     // MARK: - Log
 
     @objc func viewLog() {
-        // Try Console.app first; fall back to open -t (TextEdit)
         let logURL = URL(fileURLWithPath: LOG_FILE)
         if !FileManager.default.fileExists(atPath: LOG_FILE) {
-            // Create empty file so Console.app doesn't fail
             try? "".write(to: logURL, atomically: true, encoding: .utf8)
         }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         proc.arguments = ["-a", "Console", LOG_FILE]
         if (try? proc.run()) != nil { return }
-        // Fallback
         NSWorkspace.shared.open(logURL)
     }
 
@@ -331,7 +801,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var err: NSDictionary?
         _ = NSAppleScript(source: script)?.executeAndReturnError(&err)
         if err != nil {
-            // Fallback: reveal in Finder
             NSWorkspace.shared.open(URL(fileURLWithPath: CCP_DIR))
         }
     }
@@ -433,32 +902,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Env Parsing
 
     func loadModelSummary() -> String {
-        guard let raw = try? String(contentsOfFile: ENV_FILE, encoding: .utf8) else {
-            return "Config: (unreadable)"
-        }
+        let env = EnvFileManager.shared
+        guard !env.read().isEmpty else { return "Config: (unreadable)" }
 
-        func get(_ key: String) -> String? {
-            for line in raw.components(separatedBy: .newlines) {
-                let t = line.trimmingCharacters(in: .whitespaces)
-                guard !t.hasPrefix("#"), t.hasPrefix("\(key)=") else { continue }
-                var v = String(t.dropFirst(key.count + 1))
-                v = v.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                return v.isEmpty ? nil : v
-            }
-            return nil
-        }
+        let prov     = env.get("PREFERRED_PROVIDER") ?? "openai"
+        let frontier = env.get("FRONTIER_MODEL")     ?? "gpt-5.2"
+        let big      = env.get("BIG_MODEL")           ?? "gpt-4.1"
+        let small    = env.get("SMALL_MODEL")         ?? "gpt-4.1-mini"
+        let proxyKey = env.get("PROXY_API_KEY")
 
-        let prov     = get("PREFERRED_PROVIDER") ?? "openai"
-        let frontier = get("FRONTIER_MODEL")     ?? "gpt-5.2"
-        let big      = get("BIG_MODEL")           ?? "gpt-4.1"
-        let small    = get("SMALL_MODEL")         ?? "gpt-4.1-mini"
-        let proxyKey = get("PROXY_API_KEY")
-
-        // Auth label: show whether ANTHROPIC_API_KEY matters to the client
         let auth: String
         if prov == "anthropic" {
             auth = "⚠ ANTHROPIC_API_KEY required"
-        } else if let _ = proxyKey {
+        } else if proxyKey != nil {
             auth = "proxy-key required"
         } else {
             auth = "no Anthropic key needed"
@@ -470,41 +926,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Copy Client Setup
 
     @objc func copyClientSetup() {
-        guard let content = try? String(contentsOfFile: ENV_FILE, encoding: .utf8) else {
-            copyToClipboard("ANTHROPIC_BASE_URL=http://localhost:\(PORT)")
-            return
-        }
-
-        func get(_ key: String) -> String? {
-            for line in content.components(separatedBy: .newlines) {
-                let t = line.trimmingCharacters(in: .whitespaces)
-                guard !t.hasPrefix("#"), t.hasPrefix("\(key)=") else { continue }
-                var v = String(t.dropFirst(key.count + 1))
-                v = v.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                return v.isEmpty ? nil : v
-            }
-            return nil
-        }
-
-        let prov     = get("PREFERRED_PROVIDER") ?? "openai"
-        let proxyKey = get("PROXY_API_KEY")
+        let env = EnvFileManager.shared
+        let prov     = env.get("PREFERRED_PROVIDER") ?? "openai"
+        let proxyKey = env.get("PROXY_API_KEY")
 
         var parts = ["ANTHROPIC_BASE_URL=http://localhost:\(PORT)"]
-
         if prov == "anthropic" {
-            // Real key needed — user must supply it; just give them the base URL
             parts.append("ANTHROPIC_API_KEY=<your-sk-ant-...>")
         } else if let key = proxyKey {
-            // Proxy enforces a specific client key
             parts.append("ANTHROPIC_API_KEY=\(key)")
         } else {
-            // Any value works; use a placeholder that makes the intent clear
             parts.append("ANTHROPIC_API_KEY=proxy")
         }
 
         copyToClipboard(parts.joined(separator: " "))
 
-        // Brief visual confirmation in status header
         let saved = statusMenuItem.title
         statusMenuItem.title = "Copied to clipboard!"
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
@@ -522,7 +958,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Entry Point
 // ---------------------------------------------------------------------------
 
-let delegate = AppDelegate()
-let app = NSApplication.shared
-app.delegate = delegate
-app.run()
+@main
+enum CcpMenuBarMain {
+    static func main() {
+        let delegate = AppDelegate()
+        let app = NSApplication.shared
+        app.delegate = delegate
+        // Keep a strong reference to prevent deallocation
+        withExtendedLifetime(delegate) {
+            app.run()
+        }
+    }
+}
