@@ -36,3 +36,10 @@ ENV/
 .vscode/
 *.swp
 *.swo
+
+# Claude Code local state
+.claude/hooks/
+.claude/docsmax.json
+.claude/docsmax-status.json
+.DS_Store
+CcpMenuBar_build
