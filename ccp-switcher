@@ -41,37 +41,62 @@ T_RIGHT="╣"
 # Model catalog -- order matters for display
 # ---------------------------------------------------------------------------
 declare -a MODEL_NAMES=(
+    "gpt-4o"
+    "gpt-4o-mini"
     "gpt-4.1"
     "gpt-4.1-mini"
     "gpt-4.1-nano"
-    "gpt-4o"
     "o4-mini"
     "o3-mini"
     "o3"
-    "gpt-4.5-preview"
     "gpt-5"
     "gpt-5-mini"
+    "gpt-5-nano"
+    "gpt-5.1"
     "gpt-5.2"
-    "gpt-5.2-chat"
     "gpt-5.2-codex"
+    "gpt-5.1-codex-max"
+    "gpt-5.3-codex"
+    "gpt-5.5"
+    "gpt-6-astra"
+    "gpt-5.6-luna"
+    "gpt-5.6-terra"
+    "gpt-5.6-sol"
     "codex-mini"
+    "o1"
+    "gpt-audio"
+    "gpt-audio-mini"
+    "model-router"
 )
 
 # Parallel to MODEL_NAMES -- keep in same order
 declare -a MODEL_DESCRIPTIONS=(
+    "Strong multimodal model"
+    "GPT-4o mini deployment (serves GPT-4.1 mini)"
     "Latest GPT-4 class - best coding & general"
     "Efficient GPT-4 class"
     "Ultra-efficient GPT-4 class"
-    "Strong multimodal model"
     "Best reasoning (mini class)"
     "Reasoning model"
     "Full reasoning model"
-    "GPT-4.5 preview"
     "GPT-5 flagship"
     "GPT-5 efficient"
+    "GPT-5 smallest/lowest latency"
+    "GPT-5.1 general"
     "Latest GPT-5.2"
     "GPT-5.2 Codex - optimized for code"
+    "GPT-5.1 Codex Max"
+    "GPT-5.3 Codex"
+    "GPT-5.5 flagship"
+    "GPT-6 Astra - frontier (Responses API)"
+    "GPT-5.6 Luna - Opus 1M low effort"
+    "GPT-5.6 Terra - Opus 1M medium effort"
+    "GPT-5.6 Sol - Opus 1M high effort"
     "Codex Mini - fast code generation"
+    "O1 reasoning model"
+    "Audio model"
+    "Audio mini model"
+    "Azure/OpenAI model router"
 )
 
 # ---------------------------------------------------------------------------
@@ -79,6 +104,7 @@ declare -a MODEL_DESCRIPTIONS=(
 # ---------------------------------------------------------------------------
 declare -a PROVIDER_NAMES=(
     "azure"
+    "azure_ai"
     "openai"
     "google"
     "anthropic"
@@ -87,6 +113,7 @@ declare -a PROVIDER_NAMES=(
 # Parallel to PROVIDER_NAMES -- keep in same order
 declare -a PROVIDER_DESCRIPTIONS=(
     "Azure OpenAI Service"
+    "Azure AI Foundry"
     "OpenAI API Direct"
     "Google Gemini / Vertex AI"
     "Anthropic Claude (passthrough)"
@@ -107,9 +134,9 @@ declare -a PRESET_NAMES=(
 )
 
 declare -a PRESET_PROVIDERS=( "azure" "azure" "azure" "azure" "azure" "azure" "openai" "azure" )
-declare -a PRESET_BIG=(       "gpt-4.1" "gpt-4.1" "gpt-4o" "o4-mini" "gpt-4o" "gpt-4.1" "gpt-4.1" "gpt-5.2-codex" )
-declare -a PRESET_SMALL=(     "gpt-4o" "o4-mini" "o4-mini" "gpt-4.1-mini" "gpt-4.1-mini" "o4-mini" "gpt-4.1-mini" "gpt-5.2-chat" )
-declare -a PRESET_FRONTIER=(  "gpt-5.2" "o3" "gpt-5.2" "gpt-5" "gpt-5" "gpt-5.2-codex" "gpt-5.2" "gpt-5.2" )
+declare -a PRESET_BIG=(       "gpt-5.6-terra" "o3" "gpt-5.5" "gpt-4.1" "gpt-4o" "gpt-5.3-codex" "gpt-4.1" "gpt-5.6-terra" )
+declare -a PRESET_SMALL=(     "gpt-5.6-luna" "gpt-5.6-luna" "gpt-5.6-luna" "gpt-4.1-mini" "gpt-4o-mini" "codex-mini" "gpt-4.1-mini" "gpt-5.6-luna" )
+declare -a PRESET_FRONTIER=(  "gpt-6-astra" "gpt-6-astra" "gpt-6-astra" "o3-mini" "gpt-5" "gpt-6-astra" "gpt-6-astra" "gpt-6-astra" )
 
 declare -a PRESET_TAGS=(
     "Maximum capability, highest cost"
@@ -159,16 +186,21 @@ env_set() {
 # Read current config
 # ---------------------------------------------------------------------------
 load_config() {
+    CUR_PROFILE="$(env_get CCP_PROFILE)"
+    CUR_PROFILES_FILE="$(env_get CCP_PROFILES_FILE)"
     CUR_PROVIDER="$(env_get PREFERRED_PROVIDER)"
     CUR_BIG="$(env_get BIG_MODEL)"
     CUR_SMALL="$(env_get SMALL_MODEL)"
     CUR_FRONTIER="$(env_get FRONTIER_MODEL)"
 
     # Defaults if empty
+    [[ -z "$CUR_PROFILE" ]] && CUR_PROFILE="$(env_get ACTIVE_PROFILE)"
+    [[ -z "$CUR_PROFILE" ]] && CUR_PROFILE="default"
+    [[ -z "$CUR_PROFILES_FILE" ]] && CUR_PROFILES_FILE="$SCRIPT_DIR/profiles.json"
     [[ -z "$CUR_PROVIDER" ]]  && CUR_PROVIDER="openai"
-    [[ -z "$CUR_BIG" ]]       && CUR_BIG="gpt-4.1"
-    [[ -z "$CUR_SMALL" ]]     && CUR_SMALL="gpt-4.1-mini"
-    [[ -z "$CUR_FRONTIER" ]]  && CUR_FRONTIER="gpt-5.2"
+    [[ -z "$CUR_BIG" ]]       && CUR_BIG="gpt-5.5"
+    [[ -z "$CUR_SMALL" ]]     && CUR_SMALL="gpt-5-mini"
+    [[ -z "$CUR_FRONTIER" ]]  && CUR_FRONTIER="gpt-6-astra"
     return 0
 }
 
@@ -179,7 +211,7 @@ box_width() {
     # Returns usable interior width of the terminal (capped at 52 for the box)
     local cols
     cols="$(tput cols 2>/dev/null || printf '80')"
-    local w=52
+    local w=72
     if (( cols < w + 2 )); then
         w=$(( cols - 2 ))
     fi
@@ -272,6 +304,7 @@ draw_main_menu() {
     draw_line "$T_LEFT" "$T_RIGHT"
     draw_empty
     draw_text "${BOLD}Current Configuration:${RESET}"
+    draw_text "Profile:     ${CLR_BLUE}${BOLD}${CUR_PROFILE}${RESET}"
     draw_text "Provider:    ${CLR_CYAN}${BOLD}${CUR_PROVIDER}${RESET}"
     draw_text "Frontier:    ${CLR_MAGENTA}${BOLD}${CUR_FRONTIER}${RESET}  $(mapping_hint frontier)"
     draw_text "Big Model:   ${CLR_GREEN}${BOLD}${CUR_BIG}${RESET}  $(mapping_hint big)"
@@ -279,9 +312,10 @@ draw_main_menu() {
     draw_text "Proxy:       ${status}"
     draw_empty
     draw_line "$T_LEFT" "$T_RIGHT"
-    draw_text "${BOLD}[P]${RESET} Presets          ${BOLD}[F]${RESET} Frontier Model"
-    draw_text "${BOLD}[B]${RESET} Big Model        ${BOLD}[S]${RESET} Small Model"
-    draw_text "${BOLD}[V]${RESET} Provider         ${BOLD}[R]${RESET} Restart Proxy"
+    draw_text "${BOLD}[O]${RESET} Profiles         ${BOLD}[P]${RESET} Presets"
+    draw_text "${BOLD}[F]${RESET} Frontier Model   ${BOLD}[B]${RESET} Big Model"
+    draw_text "${BOLD}[S]${RESET} Small Model      ${BOLD}[V]${RESET} Provider"
+    draw_text "${BOLD}[D]${RESET} Diagnostics      ${BOLD}[R]${RESET} Restart Proxy"
     draw_text "${BOLD}[Q]${RESET} Quit"
     draw_line "$T_LEFT" "$T_RIGHT"
     draw_text "${BOLD}Quick Presets:${RESET}"
@@ -290,6 +324,39 @@ draw_main_menu() {
     draw_text "${CLR_YELLOW}[7]${RESET} OpenAI Direct  ${CLR_YELLOW}[8]${RESET} 2026 Best Overall"
     draw_line "$BL_CORNER" "$BR_CORNER"
     printf '\n'
+}
+
+show_diagnostics() {
+    clear_screen
+    printf '\n'
+    draw_line "$TL_CORNER" "$TR_CORNER"
+    draw_text "${BOLD}${CLR_CYAN}  Proxy Diagnostics${RESET}"
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_empty
+    draw_text "Endpoint: ${CLR_CYAN}http://localhost:${PROXY_PORT}${RESET}"
+    draw_text "Config:   ${ENV_FILE}"
+    draw_text "Profile:  ${CLR_BLUE}${CUR_PROFILE}${RESET}"
+    draw_text "Provider: ${CLR_CYAN}${CUR_PROVIDER}${RESET}"
+    draw_text "Routes:   ${CLR_MAGENTA}opus→${CUR_FRONTIER}${RESET}  ${CLR_GREEN}sonnet→${CUR_BIG}${RESET}  ${CLR_GREEN}haiku→${CUR_SMALL}${RESET}"
+    draw_empty
+    if proxy_is_running; then
+        local status
+        status="$(curl -fsS "http://localhost:${PROXY_PORT}/ccp/status" 2>/dev/null || true)"
+        if [[ -n "$status" ]] && command -v jq >/dev/null 2>&1; then
+            draw_text "${DIM}Active: $(printf '%s' "$status" | jq -r '.profile.active // "none"')${RESET}"
+            while IFS= read -r line; do
+                draw_text "${DIM}${line}${RESET}"
+            done < <(printf '%s' "$status" | jq -r '.routes | to_entries[] | "\(.key): \(.value.routed_model)"' | head -n 8)
+        else
+            draw_text "${CLR_YELLOW}Proxy is running, but /ccp/status was unavailable.${RESET}"
+        fi
+    else
+        draw_text "${CLR_RED}Proxy is stopped.${RESET}"
+    fi
+    draw_empty
+    draw_text "${DIM}Press any key to return.${RESET}"
+    draw_line "$BL_CORNER" "$BR_CORNER"
+    read -rsn1 _
 }
 
 # ---------------------------------------------------------------------------
@@ -365,6 +432,82 @@ show_model_menu() {
         fi
 
         printf '  %sInvalid choice. Enter 1-%d or [B]ack.%s\n' "${CLR_RED}" "${#MODEL_NAMES[@]}" "${RESET}"
+    done
+}
+
+# ---------------------------------------------------------------------------
+# Profile selection submenu
+# ---------------------------------------------------------------------------
+profile_names() {
+    if [[ ! -f "$CUR_PROFILES_FILE" ]] || ! command -v jq >/dev/null 2>&1; then
+        return
+    fi
+    jq -r '.profiles | keys[]?' "$CUR_PROFILES_FILE" 2>/dev/null || true
+}
+
+show_profile_menu() {
+    load_config
+    local profiles=()
+    while IFS= read -r profile; do
+        [[ -n "$profile" ]] && profiles+=("$profile")
+    done < <(profile_names)
+
+    clear_screen
+    printf '\n'
+    draw_line "$TL_CORNER" "$TR_CORNER"
+    draw_text "${BOLD}${CLR_CYAN}  Select Settings Profile${RESET}"
+    draw_line "$T_LEFT" "$T_RIGHT"
+    draw_empty
+    draw_text "Profiles file: ${DIM}${CUR_PROFILES_FILE}${RESET}"
+    draw_empty
+
+    if (( ${#profiles[@]} == 0 )); then
+        draw_text "${CLR_YELLOW}No profiles found. Create profiles.json or set CCP_PROFILES_FILE.${RESET}"
+        draw_text "${DIM}Press any key to return.${RESET}"
+        draw_line "$BL_CORNER" "$BR_CORNER"
+        read -rsn1 _
+        return
+    fi
+
+    local i=0
+    while (( i < ${#profiles[@]} )); do
+        local profile="${profiles[$i]}"
+        local marker="  "
+        if [[ "$profile" == "$CUR_PROFILE" ]]; then
+            marker="${CLR_GREEN}*${RESET} "
+        fi
+        local label=""
+        if command -v jq >/dev/null 2>&1; then
+            label="$(jq -r --arg p "$profile" '.profiles[$p].label // ""' "$CUR_PROFILES_FILE" 2>/dev/null || true)"
+        fi
+        local suffix=""
+        [[ -n "$label" ]] && suffix="  ${DIM}${label}${RESET}"
+        draw_text "${marker}${CLR_YELLOW}$(( i + 1 )).${RESET} ${BOLD}${profile}${RESET}${suffix}"
+        (( i++ ))
+    done
+
+    draw_empty
+    draw_text "${DIM}Enter number to select, or [B]ack to cancel${RESET}"
+    draw_line "$BL_CORNER" "$BR_CORNER"
+    printf '\n'
+
+    while true; do
+        printf '  %s>%s ' "${CLR_CYAN}" "${RESET}"
+        read -r choice
+        choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+
+        if [[ "$choice" == "b" || "$choice" == "back" || "$choice" == "q" ]]; then
+            return
+        fi
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#profiles[@]} )); then
+            local selected="${profiles[$(( choice - 1 ))]}"
+            env_set "CCP_PROFILE" "$selected"
+            show_confirmation "Profile" "$selected"
+            return
+        fi
+
+        printf '  %sInvalid choice. Enter 1-%d or [B]ack.%s\n' "${CLR_RED}" "${#profiles[@]}" "${RESET}"
     done
 }
 
@@ -548,7 +691,7 @@ do_restart() {
     sleep 1
 
     printf '  %sStarting proxy...%s\n' "${CLR_GREEN}" "${RESET}"
-    cd "$SCRIPT_DIR" && nohup uv run uvicorn server:app --host 0.0.0.0 --port "$PROXY_PORT" --reload > /dev/null 2>&1 &
+    cd "$SCRIPT_DIR" && nohup uv run uvicorn server:app --host 127.0.0.1 --port "$PROXY_PORT" --reload > /dev/null 2>&1 &
     disown
     sleep 2
 
@@ -585,6 +728,9 @@ main() {
         key="$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
 
         case "$key" in
+            o)
+                show_profile_menu
+                ;;
             p)
                 show_presets_menu
                 ;;
@@ -599,6 +745,9 @@ main() {
                 ;;
             v)
                 show_provider_menu
+                ;;
+            d)
+                show_diagnostics
                 ;;
             r)
                 do_restart

@@ -10,7 +10,7 @@ os.environ["AZURE_API_BASE"] = "https://azure.test"
 os.environ["AZURE_API_VERSION"] = "2025-04-01-preview"
 os.environ["BIG_MODEL"] = "gpt-4.1"
 os.environ["SMALL_MODEL"] = "gpt-4.1-mini"
-os.environ["FRONTIER_MODEL"] = "gpt-5.2"
+os.environ["FRONTIER_MODEL"] = "gpt-6-astra"
 
 # Ensure repo root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -49,8 +49,8 @@ if response.status_code != 200:
 
 try:
     assert captured.get("model", "").startswith("azure/"), f"Test 1 - Expected azure/ prefix, got: {captured.get('model')}"
-    assert "gpt-5-2" in captured.get("model", "") or "gpt-5.2" in captured.get("model", ""), f"Test 1 - Expected gpt-5.2 deployment, got: {captured.get('model')}"
-    print("  Test 1 passed: opus -> azure/gpt-5-2")
+    assert "gpt-6-astra" in captured.get("model", ""), f"Test 1 - Expected gpt-6-astra deployment, got: {captured.get('model')}"
+    print("  Test 1 passed: opus -> azure/gpt-6-astra")
 except AssertionError as e:
     print("Test 1 - Assertion failed:", str(e))
     print("Captured litellm kwargs:", captured)

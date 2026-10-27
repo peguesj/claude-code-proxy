@@ -1,0 +1,1211 @@
+{
+ "version": 1,
+ "groups": [
+  {
+   "id": "legacy-werc",
+   "resource_group": "rg-legacy-aoai",
+   "region": "eastus2",
+   "account": "legacy-aoai",
+   "purpose": "other",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "gpt-4.1",
+     "deployment": "gpt-4-1",
+     "version": "2025-04-14",
+     "sku": "Standard",
+     "capacity": 5000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "o4-mini",
+     "deployment": "o4-mini",
+     "version": "2025-04-16",
+     "sku": "Standard",
+     "capacity": 10000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-4o",
+     "deployment": "gpt-4o",
+     "version": "2024-11-20",
+     "sku": "Standard",
+     "capacity": 1000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-4.1-mini",
+     "deployment": "gpt-4-1-mini",
+     "version": "2025-04-14",
+     "sku": "Standard",
+     "capacity": 75120,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "o3-mini",
+     "deployment": "o3-mini",
+     "version": "2025-01-31",
+     "sku": "GlobalStandard",
+     "capacity": 7249,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5",
+     "deployment": "gpt-5",
+     "version": "2025-08-07",
+     "sku": "GlobalStandard",
+     "capacity": 134750,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5-mini",
+     "deployment": "gpt-5-mini",
+     "version": "2025-08-07",
+     "sku": "GlobalStandard",
+     "capacity": 45000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "o3",
+     "deployment": "o3",
+     "version": "2025-04-16",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.2",
+     "deployment": "gpt-5-2",
+     "version": "2025-12-11",
+     "sku": "GlobalStandard",
+     "capacity": 135000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.2-codex",
+     "deployment": "gpt-5-2-codex",
+     "version": "2026-01-14",
+     "sku": "GlobalStandard",
+     "capacity": 44998,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-4.1-nano",
+     "deployment": "gpt-4-1-nano",
+     "version": "2025-04-14",
+     "sku": "GlobalStandard",
+     "capacity": 675000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "codex-mini",
+     "deployment": "codex-mini",
+     "version": "2025-05-16",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-4.1-mini",
+     "deployment": "gpt-4o-mini",
+     "version": "2025-04-14",
+     "sku": "Standard",
+     "capacity": 75120,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "o1",
+     "deployment": "o1",
+     "version": "2024-12-17",
+     "sku": "Standard",
+     "capacity": 100,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "model-router",
+     "deployment": "model-router",
+     "version": "2025-11-18",
+     "sku": "GlobalStandard",
+     "capacity": 44800,
+     "format": "OpenAI",
+     "kind": "router"
+    },
+    {
+     "name": "gpt-chat-latest",
+     "deployment": "gpt-5-chat",
+     "version": "2026-05-05",
+     "sku": "GlobalStandard",
+     "capacity": 4079,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-chat-latest",
+     "deployment": "gpt-5-1-chat",
+     "version": "2026-05-05",
+     "sku": "GlobalStandard",
+     "capacity": 80,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-chat-latest",
+     "deployment": "gpt-5-2-chat",
+     "version": "2026-05-05",
+     "sku": "GlobalStandard",
+     "capacity": 80,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5-nano",
+     "deployment": "gpt-5-nano",
+     "version": "2025-08-07",
+     "sku": "DataZoneStandard",
+     "capacity": 225000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.1",
+     "deployment": "gpt-5-1",
+     "version": "2025-11-13",
+     "sku": "DataZoneStandard",
+     "capacity": 14990,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-audio",
+     "deployment": "gpt-audio",
+     "version": "2025-08-28",
+     "sku": "GlobalStandard",
+     "capacity": 30000,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-audio-mini",
+     "deployment": "gpt-audio-mini",
+     "version": "2025-12-15",
+     "sku": "GlobalStandard",
+     "capacity": 30,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "o3-mini",
+     "deployment": "o3-mini-deployment",
+     "version": "2025-01-31",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.3-codex",
+     "deployment": "gpt-5.3-codex",
+     "version": "2026-02-24",
+     "sku": "DataZoneStandard",
+     "capacity": 45000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.1-codex-max",
+     "deployment": "gpt-5.1-codex-max",
+     "version": "2025-12-04",
+     "sku": "GlobalStandard",
+     "capacity": 44999,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.5",
+     "deployment": "gpt-5.5",
+     "version": "2026-04-24",
+     "sku": "GlobalStandard",
+     "capacity": 44950,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.6-luna",
+     "deployment": "gpt-5.6-luna",
+     "version": "2026-07-09",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.6-terra",
+     "deployment": "gpt-5.6-terra",
+     "version": "2026-07-09",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.6-sol",
+     "deployment": "gpt-5.6-sol",
+     "version": "2026-07-09",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-6-astra",
+     "deployment": "gpt-6-astra",
+     "version": "2026-09-03",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-6-sol",
+     "deployment": "gpt-6-sol",
+     "version": "2026-09-22",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-image-2.5-sunburst",
+     "deployment": "gpt-image-2.5-sunburst",
+     "version": "2026-09-08",
+     "sku": "GlobalStandard",
+     "capacity": 12,
+     "format": "OpenAI",
+     "kind": "image"
+    },
+    {
+     "name": "gpt-6-luna",
+     "deployment": "gpt-6-luna",
+     "version": "2026-09-22",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-realtime-2.1-mini",
+     "deployment": "gpt-realtime-2.1-mini",
+     "version": "2026-07-07",
+     "sku": "GlobalStandard",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-image-2.5-flare",
+     "deployment": "gpt-image-2.5-flare",
+     "version": "2026-09-08",
+     "sku": "GlobalStandard",
+     "capacity": 12,
+     "format": "OpenAI",
+     "kind": "image"
+    },
+    {
+     "name": "gpt-transcribe",
+     "deployment": "gpt-transcribe",
+     "version": "2026-07-28",
+     "sku": "GlobalStandard",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-live-transcribe",
+     "deployment": "gpt-live-transcribe",
+     "version": "2026-07-28",
+     "sku": "GlobalStandard",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-realtime-2.1",
+     "deployment": "gpt-realtime-2.1",
+     "version": "2026-07-07",
+     "sku": "GlobalStandard",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-live-1",
+     "deployment": "gpt-live-1",
+     "version": "2026-09-10",
+     "sku": "GlobalStandard",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-4.1",
+     "deployment": "gpt-4-1-global",
+     "version": "2025-04-14",
+     "sku": "GlobalStandard",
+     "capacity": 134950,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-4o",
+     "deployment": "gpt-4o-global",
+     "version": "2024-11-20",
+     "sku": "GlobalStandard",
+     "capacity": 133699,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-chat-latest",
+     "deployment": "gpt-chat-latest",
+     "version": "2026-08-06",
+     "sku": "GlobalStandard",
+     "capacity": 4000,
+     "format": "OpenAI",
+     "kind": "chat"
+    }
+   ]
+  },
+  {
+   "id": "chat-eus",
+   "resource_group": "rg-ccp-chat-eus",
+   "region": "eastus",
+   "account": "example-ccp-chat-eus-aoai",
+   "purpose": "chat",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "gpt-5.4-mini",
+     "deployment": "gpt-5.4-mini",
+     "version": "2026-03-17",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.4-nano",
+     "deployment": "gpt-5.4-nano",
+     "version": "2026-03-17",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.1-codex-mini",
+     "deployment": "gpt-5.1-codex-mini",
+     "version": "2025-11-13",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-6.1-terra",
+     "deployment": "gpt-6.1-terra",
+     "version": "2026-10-26",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-oss-120b",
+     "deployment": "gpt-oss-120b",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 500,
+     "format": "OpenAI-OSS",
+     "kind": "chat"
+    },
+    {
+     "name": "Llama-3.3-70B-Instruct",
+     "deployment": "Llama-3.3-70B-Instruct",
+     "version": "9",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Meta",
+     "kind": "chat"
+    },
+    {
+     "name": "Phi-4",
+     "deployment": "Phi-4",
+     "version": "7",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Microsoft",
+     "kind": "chat"
+    },
+    {
+     "name": "Ministral-3B",
+     "deployment": "Ministral-3B",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Mistral AI",
+     "kind": "chat"
+    },
+    {
+     "name": "Mistral-Large-3",
+     "deployment": "Mistral-Large-3",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 5000,
+     "format": "Mistral AI",
+     "kind": "chat"
+    },
+    {
+     "name": "Mistral-large",
+     "deployment": "Mistral-large",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "Mistral AI",
+     "kind": "chat"
+    },
+    {
+     "name": "mistral-medium-2505",
+     "deployment": "mistral-medium-2505",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Mistral AI",
+     "kind": "chat"
+    },
+    {
+     "name": "mistral-small-2503",
+     "deployment": "mistral-small-2503",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Mistral AI",
+     "kind": "chat"
+    },
+    {
+     "name": "Codestral-2501",
+     "deployment": "Codestral-2501",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Mistral AI",
+     "kind": "chat"
+    },
+    {
+     "name": "cohere-command-a",
+     "deployment": "cohere-command-a",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 100,
+     "format": "Cohere",
+     "kind": "chat"
+    },
+    {
+     "name": "grok-4-1-fast-non-reasoning",
+     "deployment": "grok-4-1-fast-non-reasoning",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "xAI",
+     "kind": "chat"
+    },
+    {
+     "name": "grok-code-fast-1",
+     "deployment": "grok-code-fast-1",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "xAI",
+     "kind": "chat"
+    }
+   ]
+  },
+  {
+   "id": "claude-eus",
+   "resource_group": "rg-ccp-claude-eus",
+   "region": "eastus",
+   "account": "example-ccp-claude-eus-aoai",
+   "purpose": "chat",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "claude-haiku-4-5",
+     "deployment": "claude-haiku-4-5",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-haiku-5-5",
+     "deployment": "claude-haiku-5-5",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-sonnet-4-6",
+     "deployment": "claude-sonnet-4-6",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-sonnet-5",
+     "deployment": "claude-sonnet-5",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-sonnet-5-5",
+     "deployment": "claude-sonnet-5-5",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    }
+   ]
+  },
+  {
+   "id": "embeddings-eus",
+   "resource_group": "rg-ccp-embeddings-eus",
+   "region": "eastus",
+   "account": "example-ccp-embeddings-eus-aoai",
+   "purpose": "embeddings",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "text-embedding-3-large",
+     "deployment": "text-embedding-3-large",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 120,
+     "format": "OpenAI",
+     "kind": "embedding"
+    },
+    {
+     "name": "text-embedding-3-small",
+     "deployment": "text-embedding-3-small",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 120,
+     "format": "OpenAI",
+     "kind": "embedding"
+    },
+    {
+     "name": "text-embedding-ada-002",
+     "deployment": "text-embedding-ada-002",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 120,
+     "format": "OpenAI",
+     "kind": "embedding"
+    },
+    {
+     "name": "embed-v-4-0",
+     "deployment": "embed-v-4-0",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 15000,
+     "format": "Cohere",
+     "kind": "embedding"
+    },
+    {
+     "name": "Cohere-embed-v3-english",
+     "deployment": "Cohere-embed-v3-english",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "Cohere",
+     "kind": "embedding"
+    },
+    {
+     "name": "Cohere-embed-v3-multilingual",
+     "deployment": "Cohere-embed-v3-multilingual",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "Cohere",
+     "kind": "embedding"
+    },
+    {
+     "name": "Cohere-rerank-v4.0-fast",
+     "deployment": "Cohere-rerank-v4.0-fast",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 500,
+     "format": "Cohere",
+     "kind": "embedding"
+    },
+    {
+     "name": "Cohere-rerank-v4.0-pro",
+     "deployment": "Cohere-rerank-v4.0-pro",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 500,
+     "format": "Cohere",
+     "kind": "embedding"
+    }
+   ]
+  },
+  {
+   "id": "image-eus",
+   "resource_group": "rg-ccp-image-eus",
+   "region": "eastus",
+   "account": "example-ccp-image-eus-aoai",
+   "purpose": "image",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "MAI-Image-2.6",
+     "deployment": "MAI-Image-2.6",
+     "version": "2026-07-31",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "Microsoft",
+     "kind": "image"
+    },
+    {
+     "name": "MAI-Image-2.6-Flash",
+     "deployment": "MAI-Image-2.6-Flash",
+     "version": "2026-07-31",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Microsoft",
+     "kind": "image"
+    }
+   ]
+  },
+  {
+   "id": "reasoning-eus2",
+   "resource_group": "rg-ccp-reasoning-eus2",
+   "region": "eastus2",
+   "account": "example-ccp-reasoning-eus2-aoai",
+   "purpose": "reasoning",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "gpt-5.4",
+     "deployment": "gpt-5.4",
+     "version": "2026-03-05",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.4-pro",
+     "deployment": "gpt-5.4-pro",
+     "version": "2026-03-05",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5-pro",
+     "deployment": "gpt-5-pro",
+     "version": "2025-10-06",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5-codex",
+     "deployment": "gpt-5-codex",
+     "version": "2025-09-15",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.1-codex",
+     "deployment": "gpt-5.1-codex",
+     "version": "2025-11-13",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-6.1-sol",
+     "deployment": "gpt-6.1-sol",
+     "version": "2026-09-29",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "grok-4",
+     "deployment": "grok-4",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "xAI",
+     "kind": "chat"
+    },
+    {
+     "name": "grok-4-1-fast-reasoning",
+     "deployment": "grok-4-1-fast-reasoning",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "xAI",
+     "kind": "chat"
+    },
+    {
+     "name": "grok-4.7",
+     "deployment": "grok-4.7",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "xAI",
+     "kind": "chat"
+    },
+    {
+     "name": "DeepSeek-V3.2",
+     "deployment": "DeepSeek-V3.2",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 5000,
+     "format": "DeepSeek",
+     "kind": "chat"
+    },
+    {
+     "name": "DeepSeek-V3.2-Speciale",
+     "deployment": "DeepSeek-V3.2-Speciale",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 5000,
+     "format": "DeepSeek",
+     "kind": "chat"
+    },
+    {
+     "name": "DeepSeek-V4-Flash",
+     "deployment": "DeepSeek-V4-Flash",
+     "version": "2026-04-23",
+     "sku": "GlobalStandard",
+     "capacity": 5000,
+     "format": "DeepSeek",
+     "kind": "chat"
+    },
+    {
+     "name": "DeepSeek-V4-Pro",
+     "deployment": "DeepSeek-V4-Pro",
+     "version": "2026-04-23",
+     "sku": "GlobalStandard",
+     "capacity": 5000,
+     "format": "DeepSeek",
+     "kind": "chat"
+    },
+    {
+     "name": "Phi-4-mini-reasoning",
+     "deployment": "Phi-4-mini-reasoning",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Microsoft",
+     "kind": "chat"
+    }
+   ]
+  },
+  {
+   "id": "claude-opus-eus2",
+   "resource_group": "rg-ccp-claude-opus-eus2",
+   "region": "eastus2",
+   "account": "example-ccp-claude-opus-eus2-aoai",
+   "purpose": "reasoning",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "claude-opus-4-5",
+     "deployment": "claude-opus-4-5",
+     "version": "20251101",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-opus-4-6",
+     "deployment": "claude-opus-4-6",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-opus-4-7",
+     "deployment": "claude-opus-4-7",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-opus-4-8",
+     "deployment": "claude-opus-4-8",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-opus-5",
+     "deployment": "claude-opus-5",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-opus-5-5",
+     "deployment": "claude-opus-5-5",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    },
+    {
+     "name": "claude-opus-5-5-fast",
+     "deployment": "claude-opus-5-5-fast",
+     "version": "2",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Anthropic",
+     "kind": "chat"
+    }
+   ]
+  },
+  {
+   "id": "multimodal-eus2",
+   "resource_group": "rg-ccp-multimodal-eus2",
+   "region": "eastus2",
+   "account": "example-ccp-multimodal-eus2-aoai",
+   "purpose": "multimodal",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "Phi-4-multimodal-instruct",
+     "deployment": "Phi-4-multimodal-instruct",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Microsoft",
+     "kind": "chat"
+    },
+    {
+     "name": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+     "deployment": "Llama-4-Maverick-17B-128E-Instruct-FP8",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "Meta",
+     "kind": "chat"
+    },
+    {
+     "name": "Llama-4-Scout-17B-16E-Instruct",
+     "deployment": "Llama-4-Scout-17B-16E-Instruct",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1000,
+     "format": "Meta",
+     "kind": "chat"
+    }
+   ]
+  },
+  {
+   "id": "speech-eus2",
+   "resource_group": "rg-ccp-speech-eus2",
+   "region": "eastus2",
+   "account": "example-ccp-speech-eus2-aoai",
+   "purpose": "speech",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "gpt-4o-mini-transcribe",
+     "deployment": "gpt-4o-mini-transcribe",
+     "version": "2025-12-15",
+     "sku": "GlobalStandard",
+     "capacity": 60,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-4o-transcribe",
+     "deployment": "gpt-4o-transcribe",
+     "version": "2025-03-20",
+     "sku": "DataZoneStandard",
+     "capacity": 50,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-4o-transcribe-diarize",
+     "deployment": "gpt-4o-transcribe-diarize",
+     "version": "2025-10-15",
+     "sku": "GlobalStandard",
+     "capacity": 50,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-audio-1.5",
+     "deployment": "gpt-audio-1.5",
+     "version": "2026-02-23",
+     "sku": "GlobalStandard",
+     "capacity": 100,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-realtime",
+     "deployment": "gpt-realtime",
+     "version": "2025-08-28",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-realtime-1.5",
+     "deployment": "gpt-realtime-1.5",
+     "version": "2026-02-23",
+     "sku": "GlobalStandard",
+     "capacity": 10,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-realtime-mini",
+     "deployment": "gpt-realtime-mini",
+     "version": "2025-12-15",
+     "sku": "GlobalStandard",
+     "capacity": 30,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-realtime-translate",
+     "deployment": "gpt-realtime-translate",
+     "version": "2026-05-06",
+     "sku": "GlobalStandard",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "audio"
+    },
+    {
+     "name": "gpt-realtime-whisper",
+     "deployment": "gpt-realtime-whisper",
+     "version": "2026-05-06",
+     "sku": "GlobalStandard",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "audio"
+    }
+   ]
+  },
+  {
+   "id": "image-eus2",
+   "resource_group": "rg-ccp-image-eus2",
+   "region": "eastus2",
+   "account": "example-ccp-image-eus2-aoai",
+   "purpose": "image",
+   "billing": "pay_per_token",
+   "policy": "always_on",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "gpt-image-1-mini",
+     "deployment": "gpt-image-1-mini",
+     "version": "2025-10-06",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "OpenAI",
+     "kind": "image"
+    },
+    {
+     "name": "gpt-image-1.5",
+     "deployment": "gpt-image-1.5",
+     "version": "2025-12-16",
+     "sku": "GlobalStandard",
+     "capacity": 3,
+     "format": "OpenAI",
+     "kind": "image"
+    },
+    {
+     "name": "FLUX-1.1-pro",
+     "deployment": "FLUX-1.1-pro",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "Black Forest Labs",
+     "kind": "image"
+    },
+    {
+     "name": "FLUX.1-Kontext-pro",
+     "deployment": "FLUX.1-Kontext-pro",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "Black Forest Labs",
+     "kind": "image"
+    },
+    {
+     "name": "FLUX.2-pro",
+     "deployment": "FLUX.2-pro",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "Black Forest Labs",
+     "kind": "image"
+    },
+    {
+     "name": "FLUX.2-flex",
+     "deployment": "FLUX.2-flex",
+     "version": "1",
+     "sku": "GlobalStandard",
+     "capacity": 1,
+     "format": "Black Forest Labs",
+     "kind": "image"
+    }
+   ]
+  },
+  {
+   "id": "reasoning-eus2-od",
+   "resource_group": "rg-ccp-reasoning-eus2-od",
+   "region": "eastus2",
+   "account": "example-ccp-reasoning-eus2-od-aoai",
+   "purpose": "reasoning",
+   "billing": "idle_cost",
+   "policy": "on_demand",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "gpt-5.4",
+     "deployment": "gpt-5.4-ptu",
+     "version": "2026-03-05",
+     "sku": "GlobalProvisionedManaged",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-6.1-sol",
+     "deployment": "gpt-6.1-sol-ptu",
+     "version": "2026-09-29",
+     "sku": "GlobalProvisionedManaged",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "gpt-5.1-codex",
+     "deployment": "gpt-5.1-codex-ptu",
+     "version": "2025-11-13",
+     "sku": "GlobalProvisionedManaged",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "DeepSeek-V3.2",
+     "deployment": "DeepSeek-V3.2-ptu",
+     "version": "1",
+     "sku": "GlobalProvisionedManaged",
+     "capacity": 100,
+     "format": "DeepSeek",
+     "kind": "chat"
+    }
+   ]
+  },
+  {
+   "id": "chat-eus-od",
+   "resource_group": "rg-ccp-chat-eus-od",
+   "region": "eastus",
+   "account": "example-ccp-chat-eus-od-aoai",
+   "purpose": "chat",
+   "billing": "idle_cost",
+   "policy": "on_demand",
+   "idle_teardown_minutes": 60,
+   "models": [
+    {
+     "name": "gpt-5.4-mini",
+     "deployment": "gpt-5.4-mini-ptu",
+     "version": "2026-03-17",
+     "sku": "GlobalProvisionedManaged",
+     "capacity": 15,
+     "format": "OpenAI",
+     "kind": "chat"
+    },
+    {
+     "name": "Llama-3.3-70B-Instruct",
+     "deployment": "Llama-3.3-70B-Instruct-ptu",
+     "version": "9",
+     "sku": "GlobalProvisionedManaged",
+     "capacity": 15,
+     "format": "Meta",
+     "kind": "chat"
+    }
+   ]
+  }
+ ]
+}

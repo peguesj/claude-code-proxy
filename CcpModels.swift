@@ -1,13 +1,13 @@
 // CcpModels.swift — Model discovery & deployment for CCP LiteLLM
-// Compiled alongside CcpMenuBar.swift via build-menubar.sh
+// Provider discovery (non-UI) + SwiftUI Model Manager window.
 
-import Cocoa
+import SwiftUI
 
 // ---------------------------------------------------------------------------
 // MARK: - ModelEntry
 // ---------------------------------------------------------------------------
 
-struct ModelEntry {
+struct ModelEntry: Identifiable {
     enum Kind { case deployment, catalog }
     let id: String             // deployment name OR model id
     let modelName: String      // canonical model (e.g. "gpt-4o")
@@ -87,6 +87,111 @@ final class ModelsManager {
                 completion(.failure(error))
             }
         }.resume()
+    }
+
+    // MARK: - Azure AI Foundry (CLI — AIServices accounts)
+
+    private func azureAIContext() -> (rg: String, account: String, location: String)? {
+        let env = EnvFileManager.shared
+        guard let rg = env.get("AZURE_AI_RESOURCE_GROUP") ?? env.get("AZURE_RESOURCE_GROUP"),
+              let account = env.get("AZURE_AI_ACCOUNT_NAME") ?? env.get("AZURE_ACCOUNT_NAME") else {
+            return nil
+        }
+        let location = env.get("AZURE_AI_LOCATION") ?? env.get("AZURE_LOCATION") ?? "eastus2"
+        return (rg, account, location)
+    }
+
+    func listAzureAIDeployments(completion: @escaping (Result<[ModelEntry], Error>) -> Void) {
+        guard let ctx = azureAIContext() else {
+            completion(.failure(NSError(domain: "ccp", code: 41,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Set AZURE_AI_RESOURCE_GROUP/AZURE_AI_ACCOUNT_NAME or AZURE_RESOURCE_GROUP/AZURE_ACCOUNT_NAME in .env"])))
+            return
+        }
+
+        runAzCLI([
+            "cognitiveservices", "account", "deployment", "list",
+            "--resource-group", ctx.rg,
+            "--name", ctx.account,
+            "-o", "json"
+        ]) { result in
+            switch result {
+            case .failure(let e): completion(.failure(e))
+            case .success(let data):
+                do {
+                    let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+                    var entries: [ModelEntry] = []
+                    for dep in arr {
+                        let props = dep["properties"] as? [String: Any] ?? [:]
+                        let model = props["model"] as? [String: Any] ?? [:]
+                        let sku = dep["sku"] as? [String: Any] ?? [:]
+                        let name = dep["name"] as? String ?? ""
+                        let modelName = model["name"] as? String ?? name
+                        let version = model["version"] as? String ?? ""
+                        let status = props["provisioningState"] as? String ?? props["deploymentState"] as? String ?? "unknown"
+                        let capacity = sku["capacity"] as? Int ?? props["currentCapacity"] as? Int
+                        let skuName = sku["name"] as? String ?? ""
+                        entries.append(ModelEntry(
+                            id: name, modelName: modelName, version: version,
+                            kind: .deployment, provider: "azure_ai",
+                            capacity: capacity, status: status, sku: skuName
+                        ))
+                    }
+                    completion(.success(entries.sorted { $0.id < $1.id }))
+                } catch {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
+    func listAzureAICatalog(completion: @escaping (Result<[ModelEntry], Error>) -> Void) {
+        guard let ctx = azureAIContext() else {
+            completion(.failure(NSError(domain: "ccp", code: 42,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Set AZURE_AI_LOCATION plus AZURE_AI_RESOURCE_GROUP/AZURE_AI_ACCOUNT_NAME in .env"])))
+            return
+        }
+
+        runAzCLI([
+            "cognitiveservices", "model", "list",
+            "--location", ctx.location,
+            "-o", "json"
+        ]) { result in
+            switch result {
+            case .failure(let e): completion(.failure(e))
+            case .success(let data):
+                do {
+                    let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] ?? []
+                    var entries: [ModelEntry] = []
+                    for item in arr {
+                        let model = item["model"] as? [String: Any] ?? item
+                        let name = model["name"] as? String ?? ""
+                        let version = model["version"] as? String ?? ""
+                        let format = model["format"] as? String ?? ""
+                        let skuList = model["skus"] as? [[String: Any]] ?? []
+                        let skuName = skuList.compactMap { $0["name"] as? String }.joined(separator: ",")
+                        let lowered = name.lowercased()
+                        guard format.lowercased().contains("openai") ||
+                              format.lowercased().contains("anthropic") ||
+                              lowered.contains("gpt") || lowered.contains("o3") ||
+                              lowered.contains("o4") || lowered.contains("claude") ||
+                              lowered.contains("deepseek") || lowered.contains("llama") ||
+                              lowered.contains("mistral") || lowered.contains("cohere") ||
+                              lowered.contains("grok") || lowered.contains("kimi")
+                        else { continue }
+                        entries.append(ModelEntry(
+                            id: "\(name):\(version)", modelName: name,
+                            version: version, kind: .catalog, provider: "azure_ai",
+                            capacity: nil, status: format.isEmpty ? "Available" : format, sku: skuName
+                        ))
+                    }
+                    completion(.success(entries.sorted { $0.modelName < $1.modelName }))
+                } catch {
+                    completion(.failure(error))
+                }
+            }
+        }
     }
 
     /// Lists the model catalog available for deployment in the configured
@@ -171,6 +276,61 @@ final class ModelsManager {
             case .failure(let e): completion(.failure(e))
             case .success(let data):
                 completion(.success(String(data: data, encoding: .utf8) ?? ""))
+            }
+        }
+    }
+
+    // MARK: - Azure deployment operations and usage
+
+    func deleteAzureDeployment(_ deploymentName: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        let env = EnvFileManager.shared
+        guard let rg = env.get("AZURE_RESOURCE_GROUP"), let account = env.get("AZURE_ACCOUNT_NAME") else {
+            completion(.failure(NSError(domain: "ccp", code: 4, userInfo: [NSLocalizedDescriptionKey: "Set AZURE_RESOURCE_GROUP and AZURE_ACCOUNT_NAME in .env"])))
+            return
+        }
+        runAzCLI(["cognitiveservices", "account", "deployment", "delete", "--resource-group", rg,
+                  "--name", account, "--deployment-name", deploymentName, "--yes"]) { result in
+            switch result {
+            case .failure(let error): completion(.failure(error))
+            case .success: completion(.success(()))
+            }
+        }
+    }
+
+    func azureDeploymentUsage(_ deploymentName: String, completion: @escaping (Result<String, Error>) -> Void) {
+        let env = EnvFileManager.shared
+        guard let rg = env.get("AZURE_RESOURCE_GROUP"), let account = env.get("AZURE_ACCOUNT_NAME") else {
+            completion(.failure(NSError(domain: "ccp", code: 4, userInfo: [NSLocalizedDescriptionKey: "Set AZURE_RESOURCE_GROUP and AZURE_ACCOUNT_NAME in .env"])))
+            return
+        }
+        runAzCLI(["cognitiveservices", "account", "show", "--resource-group", rg, "--name", account, "--query", "id", "-o", "tsv"]) { [weak self] result in
+            switch result {
+            case .failure(let error): completion(.failure(error))
+            case .success(let data):
+                guard let resourceID = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !resourceID.isEmpty else {
+                    completion(.failure(NSError(domain: "ccp", code: 98, userInfo: [NSLocalizedDescriptionKey: "Could not resolve Azure resource ID"])))
+                    return
+                }
+                let start = ISO8601DateFormatter().string(from: Date(timeIntervalSinceNow: -3600))
+                let end = ISO8601DateFormatter().string(from: Date())
+                self?.runAzCLI(["monitor", "metrics", "list", "--resource", resourceID, "--metric", "ModelRequests,InputTokens,OutputTokens,TotalTokens,AzureOpenAIAvailabilityRate", "--interval", "PT1H", "--start-time", start, "--end-time", end, "--aggregation", "Total", "--filter", "ModelDeploymentName eq '\(deploymentName)'", "-o", "json"]) { metricResult in
+                    switch metricResult {
+                    case .failure(let error): completion(.failure(error))
+                    case .success(let metricData):
+                        do {
+                            let root = try JSONSerialization.jsonObject(with: metricData) as? [String: Any]
+                            let metrics = root?["value"] as? [[String: Any]] ?? []
+                            var parts: [String] = []
+                            for metric in metrics {
+                                let name = ((metric["name"] as? [String: Any])?["localizedValue"] as? String) ?? ((metric["name"] as? [String: Any])?["value"] as? String) ?? "Metric"
+                                let values = metric["timeseries"] as? [[String: Any]] ?? []
+                                let total = values.flatMap { ($0["data"] as? [[String: Any]]) ?? [] }.compactMap { $0["total"] as? NSNumber }.reduce(0.0) { $0 + $1.doubleValue }
+                                parts.append("\(name): \(Int(total))")
+                            }
+                            completion(.success(parts.isEmpty ? "No usage in the last hour" : parts.joined(separator: "  •  ")))
+                        } catch { completion(.failure(error)) }
+                    }
+                }
             }
         }
     }
@@ -296,7 +456,7 @@ final class ModelsManager {
 
     // MARK: - Helpers
 
-    private func runAzCLI(_ args: [String], completion: @escaping (Result<Data, Error>) -> Void) {
+    func runAzCLI(_ args: [String], completion: @escaping (Result<Data, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             // Resolve `az` absolute path
             let paths = ["/opt/homebrew/bin/az", "/usr/local/bin/az", "/usr/bin/az"]
@@ -331,519 +491,256 @@ final class ModelsManager {
     }
 }
 
-// ---------------------------------------------------------------------------
-// MARK: - ModelsWindowController
-// ---------------------------------------------------------------------------
+// MARK: - Async wrappers
 
-final class ModelsWindowController: NSWindowController, NSWindowDelegate {
-
-    // One tab = one provider
-    struct Tab {
-        let provider: String
-        let title: String
-        weak var tableView: NSTableView?
-        weak var statusLabel: NSTextField?
-        var entries: [ModelEntry] = []
-    }
-
-    var tabs: [String: Tab] = [:]
-    var tabView: NSTabView!
-
-    convenience init() {
-        let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 820, height: 520),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered, defer: false
-        )
-        w.title = "CCP LiteLLM — Model Manager"
-        w.center()
-        w.minSize = NSSize(width: 720, height: 420)
-        self.init(window: w)
-        w.delegate = self
-        buildUI()
-        refreshAll()
-    }
-
-    private func buildUI() {
-        guard let content = window?.contentView else { return }
-        tabView = NSTabView(frame: content.bounds)
-        tabView.autoresizingMask = [.width, .height]
-        content.addSubview(tabView)
-
-        addTab(provider: "azure",     title: "Azure OpenAI")
-        addTab(provider: "openai",    title: "OpenAI")
-        addTab(provider: "anthropic", title: "Anthropic")
-        addTab(provider: "google",    title: "Google")
-    }
-
-    private func addTab(provider: String, title: String) {
-        let item = NSTabViewItem(identifier: provider)
-        item.label = title
-
-        let view = NSView()
-        item.view = view
-
-        // Toolbar row
-        let toolbar = NSStackView()
-        toolbar.orientation = .horizontal
-        toolbar.spacing = 8
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-
-        let refreshBtn = NSButton(title: "Refresh", target: self, action: #selector(refreshTab(_:)))
-        refreshBtn.bezelStyle = .rounded
-        refreshBtn.identifier = NSUserInterfaceItemIdentifier(provider)
-        toolbar.addArrangedSubview(refreshBtn)
-
-        let useBig = NSButton(title: "Use as BIG", target: self, action: #selector(useAsBig(_:)))
-        useBig.bezelStyle = .rounded
-        useBig.identifier = NSUserInterfaceItemIdentifier(provider)
-        toolbar.addArrangedSubview(useBig)
-
-        let useSmall = NSButton(title: "Use as SMALL", target: self, action: #selector(useAsSmall(_:)))
-        useSmall.bezelStyle = .rounded
-        useSmall.identifier = NSUserInterfaceItemIdentifier(provider)
-        toolbar.addArrangedSubview(useSmall)
-
-        let useFrontier = NSButton(title: "Use as FRONTIER", target: self, action: #selector(useAsFrontier(_:)))
-        useFrontier.bezelStyle = .rounded
-        useFrontier.identifier = NSUserInterfaceItemIdentifier(provider)
-        toolbar.addArrangedSubview(useFrontier)
-
-        if provider == "azure" {
-            let deployBtn = NSButton(title: "Deploy Model…", target: self, action: #selector(openDeployDialog(_:)))
-            deployBtn.bezelStyle = .rounded
-            deployBtn.identifier = NSUserInterfaceItemIdentifier(provider)
-            toolbar.addArrangedSubview(deployBtn)
-        }
-
-        let spacer = NSView()
-        spacer.translatesAutoresizingMaskIntoConstraints = false
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        toolbar.addArrangedSubview(spacer)
-
-        let status = NSTextField(labelWithString: "Loading…")
-        status.font = NSFont.systemFont(ofSize: 11)
-        status.textColor = .secondaryLabelColor
-        toolbar.addArrangedSubview(status)
-
-        view.addSubview(toolbar)
-
-        // Table
-        let scroll = NSScrollView()
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        let table = NSTableView()
-        table.usesAlternatingRowBackgroundColors = true
-        table.rowHeight = 20
-        table.gridStyleMask = .solidHorizontalGridLineMask
-        table.identifier = NSUserInterfaceItemIdentifier("table-\(provider)")
-
-        // Columns
-        let cols: [(String, String, CGFloat)] = [
-            ("id",       provider == "azure" ? "Deployment" : "Model ID", 220),
-            ("model",    "Model",   160),
-            ("version",  "Version", 100),
-            ("sku",      "SKU",      90),
-            ("capacity", "Cap/TPM", 70),
-            ("status",   "Status",  100),
-        ]
-        for (key, title, width) in cols {
-            let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(key))
-            col.title = title
-            col.width = width
-            col.minWidth = 50
-            col.resizingMask = [.userResizingMask]
-            table.addTableColumn(col)
-        }
-        table.delegate = self
-        table.dataSource = self
-        scroll.documentView = table
-        view.addSubview(scroll)
-
-        NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
-            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            scroll.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 10),
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            scroll.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12),
-        ])
-
-        tabs[provider] = Tab(provider: provider, title: title, tableView: table,
-                             statusLabel: status, entries: [])
-        tabView.addTabViewItem(item)
-    }
-
-    private func table(for provider: String) -> NSTableView? { tabs[provider]?.tableView }
-
-    // MARK: - Refresh
-
-    @objc func refreshTab(_ sender: NSButton) {
-        guard let prov = sender.identifier?.rawValue else { return }
-        refresh(provider: prov)
-    }
-
-    func refreshAll() { for k in tabs.keys { refresh(provider: k) } }
-
-    func refresh(provider: String) {
-        tabs[provider]?.statusLabel?.stringValue = "Loading…"
-        tabs[provider]?.statusLabel?.textColor = .secondaryLabelColor
-
-        let onResult: (Result<[ModelEntry], Error>) -> Void = { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self = self, var tab = self.tabs[provider] else { return }
-                switch result {
-                case .success(let entries):
-                    tab.entries = entries
-                    self.tabs[provider] = tab
-                    tab.tableView?.reloadData()
-                    tab.statusLabel?.stringValue = "\(entries.count) models"
-                    tab.statusLabel?.textColor = .secondaryLabelColor
-                case .failure(let err):
-                    tab.entries = []
-                    self.tabs[provider] = tab
-                    tab.tableView?.reloadData()
-                    tab.statusLabel?.stringValue = "Error: \(err.localizedDescription)"
-                    tab.statusLabel?.textColor = .systemRed
-                }
-            }
-        }
-        switch provider {
-        case "azure":     ModelsManager.shared.listAzureDeployments(completion: onResult)
-        case "openai":    ModelsManager.shared.listOpenAI(completion: onResult)
-        case "anthropic": ModelsManager.shared.listAnthropic(completion: onResult)
-        case "google":    ModelsManager.shared.listGoogle(completion: onResult)
-        default: break
-        }
-    }
-
-    // MARK: - Use As
-
-    private func selectedEntry(in provider: String) -> ModelEntry? {
-        guard let tab = tabs[provider],
-              let table = tab.tableView,
-              table.selectedRow >= 0,
-              table.selectedRow < tab.entries.count else { return nil }
-        return tab.entries[table.selectedRow]
-    }
-
-    @objc func useAsBig(_ sender: NSButton)      { useAs(key: "BIG_MODEL",      sender: sender) }
-    @objc func useAsSmall(_ sender: NSButton)    { useAs(key: "SMALL_MODEL",    sender: sender) }
-    @objc func useAsFrontier(_ sender: NSButton) { useAs(key: "FRONTIER_MODEL", sender: sender) }
-
-    private func useAs(key: String, sender: NSButton) {
-        guard let prov = sender.identifier?.rawValue,
-              let entry = selectedEntry(in: prov) else {
-            shake(); return
-        }
-        let val = entry.id  // deployment name for Azure, model id elsewhere
-        EnvFileManager.shared.patch([key: val, "PREFERRED_PROVIDER": prov])
-        tabs[prov]?.statusLabel?.stringValue = "Set \(key) = \(val) (\(prov)). Restarting proxy…"
-        tabs[prov]?.statusLabel?.textColor = .systemGreen
-        NotificationCenter.default.post(name: .init("CcpShouldRestart"), object: nil)
-    }
-
-    private func shake() {
-        guard let w = window else { return }
-        let anim = CAKeyframeAnimation(keyPath: "frameOrigin")
-        let origin = w.frame.origin
-        anim.values = [0, -8, 8, -4, 4, 0].map {
-            NSValue(point: NSPoint(x: origin.x + CGFloat($0), y: origin.y))
-        }
-        anim.duration = 0.3
-        w.animations = ["frameOrigin": anim]
-        w.animator().setFrameOrigin(origin)
-    }
-
-    // MARK: - Deploy
-
-    @objc func openDeployDialog(_ sender: NSButton) {
-        let dlg = DeployDialog()
-        dlg.onComplete = { [weak self] success, message in
-            DispatchQueue.main.async {
-                if success {
-                    self?.tabs["azure"]?.statusLabel?.stringValue = "Deploy OK: \(message)"
-                    self?.tabs["azure"]?.statusLabel?.textColor = .systemGreen
-                    self?.refresh(provider: "azure")
-                } else {
-                    let alert = NSAlert()
-                    alert.messageText = "Deployment failed"
-                    alert.informativeText = message
-                    alert.alertStyle = .warning
-                    alert.runModal()
-                }
-            }
-        }
-        window?.beginSheet(dlg.window!, completionHandler: nil)
-    }
-}
-
-// MARK: - Table DataSource/Delegate
-
-extension ModelsWindowController: NSTableViewDataSource, NSTableViewDelegate {
-    func numberOfRows(in tableView: NSTableView) -> Int {
-        guard let id = tableView.identifier?.rawValue else { return 0 }
-        let prov = String(id.dropFirst("table-".count))
-        return tabs[prov]?.entries.count ?? 0
-    }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let id = tableView.identifier?.rawValue else { return nil }
-        let prov = String(id.dropFirst("table-".count))
-        guard let entry = tabs[prov]?.entries[safe: row],
-              let col = tableColumn?.identifier.rawValue else { return nil }
-
-        let cell = NSTableCellView()
-        let text = NSTextField(labelWithString: "")
-        text.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        text.translatesAutoresizingMaskIntoConstraints = false
-        text.lineBreakMode = .byTruncatingTail
-        cell.addSubview(text)
-        cell.textField = text
-        NSLayoutConstraint.activate([
-            text.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
-            text.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
-            text.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-        ])
-
-        switch col {
-        case "id":       text.stringValue = entry.id
-        case "model":    text.stringValue = entry.modelName
-        case "version":  text.stringValue = entry.version
-        case "sku":      text.stringValue = entry.sku
-        case "capacity": text.stringValue = entry.capacity.map { String($0) } ?? ""
-        case "status":
-            text.stringValue = entry.status
-            if entry.status.lowercased().contains("succeed") ||
-               entry.status.lowercased().contains("avail") {
-                text.textColor = .systemGreen
-            } else if entry.status.lowercased().contains("fail") ||
-                      entry.status.lowercased().contains("error") {
-                text.textColor = .systemRed
-            } else {
-                text.textColor = .secondaryLabelColor
-            }
-        default: break
-        }
-        return cell
-    }
-}
-
-// ---------------------------------------------------------------------------
-// MARK: - DeployDialog (sheet)
-// ---------------------------------------------------------------------------
-
-final class DeployDialog: NSWindowController {
-
-    var onComplete: ((Bool, String) -> Void)?
-
-    var catalogPopup: NSPopUpButton!
-    var deployNameField: NSTextField!
-    var skuPopup: NSPopUpButton!
-    var capacityField: NSTextField!
-    var deployBtn: NSButton!
-    var cancelBtn: NSButton!
-    var statusLabel: NSTextField!
-    var spinner: NSProgressIndicator!
-
-    var catalog: [ModelEntry] = []
-
-    convenience init() {
-        let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 320),
-            styleMask: [.titled],
-            backing: .buffered, defer: false
-        )
-        w.title = "Deploy Azure OpenAI Model"
-        self.init(window: w)
-        buildUI()
-        loadCatalog()
-    }
-
-    private func buildUI() {
-        guard let content = window?.contentView else { return }
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: content.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
-            stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
-        ])
-
-        func label(_ s: String) -> NSTextField {
-            let l = NSTextField(labelWithString: s)
-            l.font = NSFont.systemFont(ofSize: 11)
-            l.textColor = .secondaryLabelColor
-            return l
-        }
-        func wide(_ v: NSView, w: CGFloat = 450) -> NSView {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            v.widthAnchor.constraint(equalToConstant: w).isActive = true
-            return v
-        }
-
-        stack.addArrangedSubview(label("Model from catalog"))
-        catalogPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        catalogPopup.addItem(withTitle: "Loading catalog…")
-        stack.addArrangedSubview(wide(catalogPopup))
-
-        stack.addArrangedSubview(label("Deployment name (used as model ID in .env)"))
-        deployNameField = NSTextField()
-        deployNameField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        stack.addArrangedSubview(wide(deployNameField))
-
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.spacing = 12
-        let skuCol = NSStackView()
-        skuCol.orientation = .vertical
-        skuCol.alignment = .leading
-        skuCol.spacing = 2
-        skuCol.addArrangedSubview(label("SKU"))
-        skuPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        skuPopup.addItems(withTitles: ["Standard", "GlobalStandard", "DataZoneStandard", "ProvisionedManaged"])
-        skuCol.addArrangedSubview(wide(skuPopup, w: 200))
-        row.addArrangedSubview(skuCol)
-
-        let capCol = NSStackView()
-        capCol.orientation = .vertical
-        capCol.alignment = .leading
-        capCol.spacing = 2
-        capCol.addArrangedSubview(label("Capacity (TPM ×1000)"))
-        capacityField = NSTextField(string: "10")
-        capacityField.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        capCol.addArrangedSubview(wide(capacityField, w: 100))
-        row.addArrangedSubview(capCol)
-        stack.addArrangedSubview(row)
-
-        stack.addArrangedSubview(NSView())
-
-        spinner = NSProgressIndicator()
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
-
-        statusLabel = NSTextField(labelWithString: "")
-        statusLabel.font = NSFont.systemFont(ofSize: 11)
-        statusLabel.textColor = .secondaryLabelColor
-
-        let statusRow = NSStackView(views: [spinner, statusLabel])
-        statusRow.spacing = 6
-        stack.addArrangedSubview(statusRow)
-
-        let buttonRow = NSStackView()
-        buttonRow.orientation = .horizontal
-        buttonRow.spacing = 8
-        cancelBtn = NSButton(title: "Cancel", target: self, action: #selector(cancel))
-        cancelBtn.bezelStyle = .rounded
-        cancelBtn.keyEquivalent = "\u{1b}"
-        deployBtn = NSButton(title: "Deploy", target: self, action: #selector(deploy))
-        deployBtn.bezelStyle = .rounded
-        deployBtn.keyEquivalent = "\r"
-        deployBtn.isEnabled = false
-        buttonRow.addArrangedSubview(cancelBtn)
-        buttonRow.addArrangedSubview(deployBtn)
-        stack.addArrangedSubview(buttonRow)
-    }
-
-    private func loadCatalog() {
-        statusLabel.stringValue = "Fetching Azure model catalog…"
-        spinner.startAnimation(nil)
-        ModelsManager.shared.listAzureCatalog { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.spinner.stopAnimation(nil)
-                self.catalogPopup.removeAllItems()
-                switch result {
-                case .failure(let err):
-                    self.statusLabel.stringValue = "Error: \(err.localizedDescription)"
-                    self.statusLabel.textColor = .systemRed
-                    self.catalogPopup.addItem(withTitle: "(no models)")
-                case .success(let entries):
-                    self.catalog = entries
-                    if entries.isEmpty {
-                        self.catalogPopup.addItem(withTitle: "(no models available)")
-                        self.statusLabel.stringValue = "Catalog empty for this account"
-                    } else {
-                        for e in entries {
-                            self.catalogPopup.addItem(withTitle: "\(e.modelName)  v\(e.version)")
-                        }
-                        self.deployBtn.isEnabled = true
-                        self.statusLabel.stringValue = "\(entries.count) models available"
-                        // Default deployment name
-                        if let first = entries.first {
-                            self.deployNameField.stringValue = "\(first.modelName)-deployment"
-                        }
-                    }
-                }
+extension ModelsManager {
+    func list(provider: String) async throws -> [ModelEntry] {
+        try await withCheckedThrowingContinuation { cont in
+            let done: (Result<[ModelEntry], Error>) -> Void = { cont.resume(with: $0) }
+            switch provider {
+            case "azure":     listAzureDeployments(completion: done)
+            case "azure_ai":  listAzureAIDeployments(completion: done)
+            case "openai":    listOpenAI(completion: done)
+            case "anthropic": listAnthropic(completion: done)
+            case "google":    listGoogle(completion: done)
+            default:          cont.resume(returning: [])
             }
         }
     }
 
-    @objc private func cancel() {
-        guard let w = window else { return }
-        w.sheetParent?.endSheet(w)
+    func catalog() async throws -> [ModelEntry] {
+        try await withCheckedThrowingContinuation { cont in
+            listAzureCatalog { cont.resume(with: $0) }
+        }
     }
 
-    @objc private func deploy() {
-        let idx = catalogPopup.indexOfSelectedItem
-        guard idx >= 0, idx < catalog.count else { return }
-        let model = catalog[idx]
-        let name = deployNameField.stringValue.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else {
-            statusLabel.stringValue = "Deployment name required"
-            statusLabel.textColor = .systemRed
-            return
+    func deploy(name: String, model: String, version: String, sku: String, capacity: Int) async throws -> String {
+        try await withCheckedThrowingContinuation { cont in
+            deployAzureModel(deploymentName: name, modelName: model, modelVersion: version,
+                             skuName: sku, skuCapacity: capacity) { cont.resume(with: $0) }
         }
-        let sku = skuPopup.titleOfSelectedItem ?? "Standard"
-        let cap = Int(capacityField.stringValue) ?? 10
+    }
 
-        deployBtn.isEnabled = false
-        cancelBtn.isEnabled = false
-        spinner.startAnimation(nil)
-        statusLabel.stringValue = "Deploying \(model.modelName) v\(model.version) as \(name)…"
-        statusLabel.textColor = .secondaryLabelColor
+    func delete(deployment: String) async throws {
+        try await withCheckedThrowingContinuation { cont in
+            deleteAzureDeployment(deployment) { cont.resume(with: $0) }
+        }
+    }
 
-        ModelsManager.shared.deployAzureModel(
-            deploymentName: name,
-            modelName: model.modelName,
-            modelVersion: model.version,
-            skuName: sku,
-            skuCapacity: cap
-        ) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self = self, let w = self.window else { return }
-                self.spinner.stopAnimation(nil)
-                switch result {
-                case .success:
-                    w.sheetParent?.endSheet(w)
-                    self.onComplete?(true, "deployed \(name)")
-                case .failure(let err):
-                    self.deployBtn.isEnabled = true
-                    self.cancelBtn.isEnabled = true
-                    self.statusLabel.stringValue = "Failed"
-                    self.statusLabel.textColor = .systemRed
-                    self.onComplete?(false, err.localizedDescription)
-                }
-            }
+    func usage(deployment: String) async throws -> String {
+        try await withCheckedThrowingContinuation { cont in
+            azureDeploymentUsage(deployment) { cont.resume(with: $0) }
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// MARK: - Safe Array
+// MARK: - Model Manager (SwiftUI)
 // ---------------------------------------------------------------------------
 
-extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
+struct ProviderTab: Identifiable, Hashable {
+    let id: String
+    let title: String
+    static let all = [
+        ProviderTab(id: "azure", title: "Azure OpenAI"),
+        ProviderTab(id: "azure_ai", title: "Azure AI Foundry"),
+        ProviderTab(id: "openai", title: "OpenAI"),
+        ProviderTab(id: "anthropic", title: "Anthropic"),
+        ProviderTab(id: "google", title: "Google"),
+    ]
+}
+
+struct ModelManagerView: View {
+    @Environment(AppModel.self) private var app
+
+    @State private var provider = "azure"
+    @State private var entries: [String: [ModelEntry]] = [:]
+    @State private var errors: [String: String] = [:]
+    @State private var loading: Set<String> = []
+    @State private var selection: ModelEntry.ID?
+    @State private var showDeploy = false
+    @State private var confirmDelete = false
+    @State private var info: String?
+    @State private var status = ""
+
+    private var rows: [ModelEntry] { entries[provider] ?? [] }
+    private var selected: ModelEntry? { rows.first { $0.id == selection } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Provider", selection: $provider) {
+                ForEach(ProviderTab.all) { Text($0.title).tag($0.id) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(10)
+
+            toolbar.padding(.horizontal, 10).padding(.bottom, 8)
+
+            Table(rows, selection: $selection) {
+                TableColumn(provider == "azure" || provider == "azure_ai" ? "Deployment" : "Model ID") { e in
+                    Text(e.id).font(.system(.body, design: .monospaced))
+                }
+                TableColumn("Model") { Text($0.modelName) }
+                TableColumn("Version") { Text($0.version) }.width(80)
+                TableColumn("SKU") { Text($0.sku) }.width(110)
+                TableColumn("Cap/TPM") { Text($0.capacity.map(String.init) ?? "") }.width(70)
+                TableColumn("Status") { e in
+                    Text(e.status).foregroundStyle(statusColor(e.status))
+                }.width(90)
+            }
+            .overlay {
+                if loading.contains(provider) { ProgressView() }
+                else if let err = errors[provider] {
+                    ContentUnavailableView("Could not load models", systemImage: "exclamationmark.triangle",
+                                           description: Text(err))
+                }
+            }
+        }
+        .frame(minWidth: 760, minHeight: 440)
+        .task(id: provider) { if entries[provider] == nil { await refresh(provider) } }
+        .sheet(isPresented: $showDeploy) {
+            DeployModelView { await refresh("azure") }
+        }
+        .confirmationDialog("Delete Azure deployment \(selected?.id ?? "")?",
+                            isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete Deployment", role: .destructive) { Task { await deleteSelected() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes the deployment. The underlying model remains available for a future deployment.")
+        }
+        .alert("Azure usage", isPresented: Binding(get: { info != nil }, set: { if !$0 { info = nil } })) {
+            Button("OK") { info = nil }
+        } message: { Text(info ?? "") }
+    }
+
+    private var toolbar: some View {
+        HStack {
+            Button("Refresh") { Task { await refresh(provider) } }
+            Button("Use as BIG") { useAs("BIG_MODEL") }.disabled(selected == nil)
+            Button("Use as SMALL") { useAs("SMALL_MODEL") }.disabled(selected == nil)
+            Button("Use as FRONTIER") { useAs("FRONTIER_MODEL") }.disabled(selected == nil)
+            if provider == "azure" {
+                Divider().frame(height: 16)
+                Button("Deploy Model…") { showDeploy = true }
+                Button("Usage") { Task { await showUsage() } }.disabled(selected == nil)
+                Button("Delete Deployment") { confirmDelete = true }.disabled(selected == nil)
+            }
+            Spacer()
+            Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+
+    private func statusColor(_ s: String) -> Color {
+        let l = s.lowercased()
+        if l.contains("succeed") || l.contains("avail") { return .green }
+        if l.contains("fail") || l.contains("error") { return .red }
+        return .secondary
+    }
+
+    private func refresh(_ p: String) async {
+        loading.insert(p); errors[p] = nil
+        defer { loading.remove(p) }
+        do {
+            let list = try await ModelsManager.shared.list(provider: p)
+            entries[p] = list
+            status = "\(list.count) models"
+        } catch {
+            entries[p] = []
+            errors[p] = error.localizedDescription
+            status = ""
+        }
+    }
+
+    private func useAs(_ key: String) {
+        guard let e = selected else { return }
+        EnvFileManager.shared.patch([key: e.id, "PREFERRED_PROVIDER": provider])
+        status = "Set \(key) = \(e.id) (\(provider)). Restarting proxy…"
+        Task { await app.restartProxy() }
+    }
+
+    private func showUsage() async {
+        guard let e = selected else { return }
+        do { info = "\(e.id) — last hour\n\n" + (try await ModelsManager.shared.usage(deployment: e.id)) }
+        catch { info = error.localizedDescription }
+    }
+
+    private func deleteSelected() async {
+        guard let e = selected else { return }
+        do {
+            try await ModelsManager.shared.delete(deployment: e.id)
+            status = "Deleted \(e.id)"
+            await refresh("azure")
+        } catch { info = "Delete failed: \(error.localizedDescription)" }
+    }
+}
+
+struct DeployModelView: View {
+    @Environment(\.dismiss) private var dismiss
+    let onDone: () async -> Void
+
+    @State private var catalog: [ModelEntry] = []
+    @State private var choice: ModelEntry.ID?
+    @State private var name = ""
+    @State private var sku = "Standard"
+    @State private var capacity = "10"
+    @State private var status = "Fetching Azure model catalog…"
+    @State private var busy = true
+    @State private var failed = false
+
+    private static let skus = ["Standard", "GlobalStandard", "DataZoneStandard", "ProvisionedManaged"]
+
+    var body: some View {
+        Form {
+            Picker("Model from catalog", selection: $choice) {
+                ForEach(catalog) { Text("\($0.modelName)  v\($0.version)").tag(Optional($0.id)) }
+            }
+            .onChange(of: choice) { _, new in
+                if let e = catalog.first(where: { $0.id == new }) { name = "\(e.modelName)-deployment" }
+            }
+            TextField("Deployment name", text: $name)
+            Picker("SKU", selection: $sku) { ForEach(Self.skus, id: \.self) { Text($0) } }
+            TextField("Capacity (TPM ×1000)", text: $capacity)
+            HStack {
+                if busy { ProgressView().controlSize(.small) }
+                Text(status).font(.caption).foregroundStyle(failed ? .red : .secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }.disabled(busy && !catalog.isEmpty)
+                Button("Deploy") { Task { await deploy() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(busy || choice == nil || name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 500)
+        .task { await load() }
+    }
+
+    private func load() async {
+        do {
+            catalog = try await ModelsManager.shared.catalog()
+            choice = catalog.first?.id
+            status = catalog.isEmpty ? "Catalog empty for this account" : "\(catalog.count) models available"
+        } catch {
+            status = "Error: \(error.localizedDescription)"; failed = true
+        }
+        busy = false
+    }
+
+    private func deploy() async {
+        guard let e = catalog.first(where: { $0.id == choice }) else { return }
+        let dep = name.trimmingCharacters(in: .whitespaces)
+        busy = true; failed = false
+        status = "Deploying \(e.modelName) v\(e.version) as \(dep)…"
+        do {
+            _ = try await ModelsManager.shared.deploy(name: dep, model: e.modelName, version: e.version,
+                                                      sku: sku, capacity: Int(capacity) ?? 10)
+            await onDone()
+            dismiss()
+        } catch {
+            status = "Failed: \(error.localizedDescription)"; failed = true; busy = false
+        }
     }
 }

@@ -43,3 +43,12 @@ ENV/
 .claude/docsmax-status.json
 .DS_Store
 CcpMenuBar_build
+# Restore-point snapshots (contain copies of .env and credentials)
+apm/snapshots/
+
+# CCP group runtime state
+apm/ccp_group_state.json
+
+# local deployment registry (real account names); see ccp_groups.example.json
+ccp_groups.json
+apm/provision-results.json

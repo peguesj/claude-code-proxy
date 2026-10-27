@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SWIFT_SRCS=("$SCRIPT_DIR/CcpMenuBar.swift" "$SCRIPT_DIR/CcpModels.swift")
+SWIFT_SRCS=("$SCRIPT_DIR/CcpMenuBar.swift" "$SCRIPT_DIR/CcpModels.swift" "$SCRIPT_DIR/CcpGroups.swift")
 BINARY_NAME="CcpMenuBar"
 APP_DIR="$HOME/Applications/CCP LiteLLM.app"
 APP_MACOS="$APP_DIR/Contents/MacOS"
@@ -15,6 +15,7 @@ CCP_BIN="$HOME/.local/bin/ccp-litellm"
 
 PROXY_PLIST="$HOME/Library/LaunchAgents/com.ccp.litellm.proxy.plist"
 MENUBAR_PLIST="$HOME/Library/LaunchAgents/com.ccp.litellm.menubar.plist"
+MENUBAR_LABEL="com.ccp.litellm.menubar"
 
 NO_LAUNCH=false
 for arg in "$@"; do
@@ -38,8 +39,11 @@ if ! command -v swiftc &>/dev/null; then
 fi
 
 SWIFTC_TMP="$SCRIPT_DIR/${BINARY_NAME}_build"
+# SwiftUI MenuBarExtra app (macOS 14+); @main App needs -parse-as-library.
 swiftc \
-    -framework Cocoa \
+    -parse-as-library \
+    -swift-version 5 \
+    -target "$(uname -m)-apple-macos14.0" \
     -O \
     -module-name CcpMenuBar \
     "${SWIFT_SRCS[@]}" \
@@ -74,9 +78,9 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
     <key>CFBundleExecutable</key>
     <string>CcpMenuBar</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>2.0.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>2.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSUIElement</key>
@@ -89,11 +93,12 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
         <true/>
     </dict>
     <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
+    <string>14.0</string>
 </dict>
 </plist>
 PLIST
 
+codesign --force --sign - "$APP_DIR" >/dev/null 2>&1 && echo "  OK: ad-hoc signed" || echo "  WARN: codesign failed (continuing)"
 echo "  OK: bundle at $APP_DIR"
 echo ""
 
@@ -113,8 +118,12 @@ cat > "$PROXY_PLIST" << PLIST
     <string>com.ccp.litellm.proxy</string>
     <key>ProgramArguments</key>
     <array>
-        <string>${CCP_BIN}</string>
-        <string>start</string>
+        <string>${SCRIPT_DIR}/.venv/bin/uvicorn</string>
+        <string>server:app</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8082</string>
     </array>
     <key>RunAtLoad</key>
     <false/>
@@ -129,7 +138,7 @@ cat > "$PROXY_PLIST" << PLIST
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/Users/jeremiah/.local/bin</string>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/jeremiah/.local/bin</string>
     </dict>
 </dict>
 </plist>
@@ -192,9 +201,16 @@ if $NO_LAUNCH; then
     exit 0
 fi
 
-echo "▸ Killing any existing instance..."
-pkill -f "$BINARY_NAME" 2>/dev/null && sleep 0.5 || true
-
-echo "▸ Launching $APP_DIR ..."
-open "$APP_DIR"
-echo "  Done — look for the status icon in your menu bar."
+echo "▸ Reloading LaunchAgent $MENUBAR_LABEL ..."
+GUI="gui/$(id -u)"
+launchctl bootout "$GUI/$MENUBAR_LABEL" 2>/dev/null || true
+pkill -f "$APP_BINARY" 2>/dev/null && sleep 0.5 || true
+launchctl bootstrap "$GUI" "$MENUBAR_PLIST"
+launchctl kickstart -k "$GUI/$MENUBAR_LABEL"
+sleep 1.5
+if pgrep -f "$APP_BINARY" >/dev/null; then
+    echo "  Done — running (pid $(pgrep -f "$APP_BINARY" | head -1)); look for the status icon in your menu bar."
+else
+    echo "  ERROR: app process not running; check: launchctl print $GUI/$MENUBAR_LABEL"
+    exit 1
+fi
