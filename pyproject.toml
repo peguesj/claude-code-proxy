@@ -9,7 +9,13 @@ dependencies = [
     "uvicorn>=0.34.0",
     "httpx>=0.25.0",
     "pydantic>=2.0.0",
-    "litellm>=1.77.7",
+    # LiteLLM Vulnerability Policy (v1.0 - 2026-03-30):
+    # - CRITICAL: Block supply chain attack versions 1.82.7, 1.82.8 (TeamPCP/Trivy compromise)
+    # - CRITICAL: CVE-2024-6825 affects 1.40.3-1.40.12 (RCE via post_call_rules)
+    # - HIGH: CVE-2024-8984 affects <1.56.2 (DoS via multipart boundary)
+    # - Safe range: >=1.77.7 covers CVE fixes, <1.82.0 blocks supply chain attack
+    # See: LITELLM_VULNERABILITY_POLICY.md for full details
+    "litellm>=1.77.7,<1.82.0",
     "python-dotenv>=1.0.0",
     "google-auth>=2.41.1",
     "google-cloud-aiplatform>=1.120.0",

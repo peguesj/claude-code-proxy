@@ -1,0 +1,53 @@
+%% Claude Code Proxy — Architecture
+graph LR
+    subgraph Client
+        CC[Claude Code CLI]
+        SDK[Anthropic SDK clients]
+    end
+
+    subgraph Proxy["Claude Code Proxy :8082 (FastAPI)"]
+        MW[auth_and_log middleware<br/>PROXY_API_KEY]
+        EP["/v1/messages<br/>/v1/messages/count_tokens"]
+        CONV[convert_anthropic_to_litellm]
+        ROUTE[Provider Router<br/>PREFERRED_PROVIDER]
+        AZMAP[resolve_azure_deployment<br/>AZURE_DEPLOYMENT_MAP]
+        STREAM[handle_streaming SSE bridge]
+        TOOL[Tool/Function mapper]
+        GEMS[clean_gemini_schema]
+        BACK[convert_litellm_to_anthropic]
+        FB[Fallback: Azure on 404/missing key]
+    end
+
+    subgraph LiteLLM["LiteLLM v1.77.7 <1.82.0"]
+        LL[litellm.completion]
+    end
+
+    subgraph Backends
+        AZ[Azure OpenAI]
+        OAI[OpenAI]
+        GEM[Google Gemini / Vertex]
+        ANT[Anthropic]
+    end
+
+    CC -- ANTHROPIC_BASE_URL --> MW
+    SDK --> MW
+    MW --> EP
+    EP --> CONV
+    CONV --> ROUTE
+    ROUTE --> AZMAP
+    ROUTE --> GEMS
+    ROUTE --> TOOL
+    AZMAP --> LL
+    GEMS --> LL
+    TOOL --> LL
+    LL --> AZ
+    LL --> OAI
+    LL --> GEM
+    LL --> ANT
+    ANT -.404/missing.-> FB
+    FB -.one-shot retry.-> AZ
+    LL --> STREAM
+    LL --> BACK
+    BACK --> EP
+    STREAM --> EP
+    EP --> CC

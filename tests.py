@@ -29,7 +29,7 @@ load_dotenv()
 
 # Configuration
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-PROXY_API_KEY = os.environ.get("ANTHROPIC_API_KEY")  # Using same key for proxy
+PROXY_API_KEY = os.environ.get("PROXY_API_KEY", os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("AZURE_API_KEY") or os.environ.get("OPENAI_API_KEY"))  # Prefer explicit PROXY_API_KEY, fallback to ANTHROPIC, AZURE, or OPENAI keys
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
 PROXY_API_URL = "http://localhost:8082/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
@@ -327,27 +327,44 @@ def test_request(test_name, request_data, check_tools=False):
     proxy_data = request_data.copy()
     
     try:
-        # Send requests to both APIs
-        print("\nSending to Anthropic API...")
-        anthropic_response = get_response(ANTHROPIC_API_URL, anthropic_headers, anthropic_data)
+        # Send requests to both APIs (skip Anthropic if key missing)
+        if ANTHROPIC_API_KEY:
+            print("\nSending to Anthropic API...")
+            anthropic_response = get_response(ANTHROPIC_API_URL, anthropic_headers, anthropic_data)
+        else:
+            print("\nSkipping Anthropic API call (no ANTHROPIC_API_KEY set).")
+            anthropic_response = None
         
         print("\nSending to Proxy...")
         proxy_response = get_response(PROXY_API_URL, proxy_headers, proxy_data)
         
         # Check response codes
-        print(f"\nAnthropic status code: {anthropic_response.status_code}")
+        if anthropic_response is not None:
+            print(f"\nAnthropic status code: {anthropic_response.status_code}")
         print(f"Proxy status code: {proxy_response.status_code}")
         
-        if anthropic_response.status_code != 200 or proxy_response.status_code != 200:
+        if (anthropic_response is not None and anthropic_response.status_code != 200) or proxy_response.status_code != 200:
             print("\n⚠️ One or both requests failed")
-            if anthropic_response.status_code != 200:
+            if anthropic_response is not None and anthropic_response.status_code != 200:
                 print(f"Anthropic error: {anthropic_response.text}")
             if proxy_response.status_code != 200:
                 print(f"Proxy error: {proxy_response.text}")
             return False
         
-        # Compare the responses
-        result = compare_responses(anthropic_response, proxy_response, check_tools=check_tools)
+        # Compare the responses or do basic proxy validation if Anthropic not available
+        if anthropic_response is not None:
+            result = compare_responses(anthropic_response, proxy_response, check_tools=check_tools)
+        else:
+            # Basic proxy validation
+            proxy_json = proxy_response.json()
+            print("\n--- Proxy Response Structure ---")
+            print(json.dumps({k: v for k, v in proxy_json.items() if k != "content"}, indent=2))
+            assert proxy_json.get("role") == "assistant", "Proxy role is not 'assistant'"
+            assert proxy_json.get("type") == "message", "Proxy type is not 'message'"
+            assert "content" in proxy_json, "No content in Proxy response"
+            proxy_content = proxy_json["content"]
+            assert isinstance(proxy_content, list) and len(proxy_content) > 0, "Proxy content is empty or invalid"
+            result = True
         if result:
             print(f"\n✅ Test {test_name} passed!")
             return True
@@ -695,9 +712,9 @@ async def run_tests(args):
         return False
 
 async def main():
-    # Check that API key is set
-    if not ANTHROPIC_API_KEY:
-        print("Error: ANTHROPIC_API_KEY not set in .env file")
+    # Check that at least one relevant API key is set (proxy or provider keys)
+    if not (PROXY_API_KEY or ANTHROPIC_API_KEY or os.environ.get("AZURE_API_KEY") or os.environ.get("OPENAI_API_KEY")):
+        print("Error: No API keys configured. Set PROXY_API_KEY, ANTHROPIC_API_KEY, AZURE_API_KEY, or OPENAI_API_KEY in .env")
         return
     
     # Parse command-line arguments

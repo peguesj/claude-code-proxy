@@ -1,0 +1,17 @@
+%% Claude Code Proxy — Risk Matrix
+quadrantChart
+    title Risk Assessment (Likelihood x Impact)
+    x-axis Low Likelihood --> High Likelihood
+    y-axis Low Impact --> High Impact
+    quadrant-1 Monitor
+    quadrant-2 Mitigate Now
+    quadrant-3 Accept
+    quadrant-4 Contingency
+    "LiteLLM supply-chain": [0.6, 1.0]
+    "Provider API drift": [0.8, 0.8]
+    "CVE-2024-6825 RCE": [0.4, 1.0]
+    "Azure deploy name drift": [0.6, 0.6]
+    "Provider outages": [0.6, 0.6]
+    "Credential log leakage": [0.4, 0.8]
+    "Maintainer bottleneck": [0.6, 0.4]
+    "Gemini schema mismatch": [0.4, 0.4]

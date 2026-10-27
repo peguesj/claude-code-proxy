@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code Proxy — OpsDoc</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-0: #0a0b10;
+  --bg-1: #10131c;
+  --bg-2: #161a26;
+  --surface: rgba(22, 26, 38, 0.72);
+  --surface-strong: rgba(28, 33, 48, 0.85);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --text: #e8eaf0;
+  --text-dim: #9aa1b4;
+  --text-faint: #5f6678;
+  --accent: #f5c518;
+  --accent-2: #7c9cff;
+  --danger: #ff5a5f;
+  --warn: #ffb547;
+  --success: #40e0a7;
+  --info: #7c9cff;
+  --radius: 14px;
+  --radius-sm: 8px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.5), 0 24px 64px rgba(0,0,0,.55);
+  --blur: 20px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  background: var(--bg-0);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(1200px 800px at 10% -10%, rgba(124,156,255,0.08), transparent 60%),
+    radial-gradient(900px 600px at 110% 10%, rgba(245,197,24,0.06), transparent 55%),
+    radial-gradient(800px 500px at 50% 120%, rgba(64,224,167,0.05), transparent 55%);
+  pointer-events: none; z-index: 0;
+}
+code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+a { color: var(--accent-2); text-decoration: none; }
+a:hover { color: var(--accent); }
+
+/* Layout */
+.app { display: grid; grid-template-columns: 260px 1fr 320px; gap: 0; min-height: 100vh; position: relative; z-index: 1; }
+.sidebar, .content, .inspector { padding: 28px 24px; }
+.sidebar {
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  background: rgba(16,19,28,0.6);
+  backdrop-filter: blur(var(--blur)); -webkit-backdrop-filter: blur(var(--blur));
+  border-right: 1px solid var(--border);
+}
+.inspector {
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  background: rgba(16,19,28,0.5);
+  backdrop-filter: blur(var(--blur)); -webkit-backdrop-filter: blur(var(--blur));
+  border-left: 1px solid var(--border);
+}
+.content { max-width: none; padding: 40px 48px 80px; }
+@media (max-width: 1200px) { .app { grid-template-columns: 240px 1fr; } .inspector { display: none; } }
+@media (max-width: 768px)  { .app { grid-template-columns: 1fr; } .sidebar { position: relative; height: auto; } }
+
+/* Brand */
+.brand { display: flex; align-items: center; gap: 10px; padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+.brand-logo { width: 32px; height: 32px; border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  display: grid; place-items: center; color: #0a0b10; font-weight: 800; font-size: 14px; }
+.brand-name { font-weight: 700; font-size: 14px; letter-spacing: 0.02em; }
+.brand-sub { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.1em; }
+
+/* Nav */
+.nav-group { margin-bottom: 18px; }
+.nav-group-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--text-faint); margin-bottom: 8px; padding: 0 10px; font-weight: 600; }
+.nav-item { display: block; padding: 8px 10px; border-radius: 8px; font-size: 13px; color: var(--text-dim); cursor: pointer; transition: all .15s; border: 1px solid transparent; }
+.nav-item:hover { background: rgba(255,255,255,0.04); color: var(--text); }
+.nav-item.active { background: rgba(245,197,24,0.08); color: var(--accent); border-color: rgba(245,197,24,0.2); }
+
+/* Header */
+.page-header { margin-bottom: 32px; }
+.eyebrow { display: inline-block; font-size: 10px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--accent); padding: 4px 10px; background: rgba(245,197,24,0.08); border: 1px solid rgba(245,197,24,0.2); border-radius: 999px; margin-bottom: 14px; font-weight: 600; }
+h1 { font-size: 34px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15; margin-bottom: 10px; }
+h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 28px 0 14px; color: var(--text); }
+h3 { font-size: 15px; font-weight: 600; margin: 18px 0 10px; color: var(--text); text-transform: uppercase; letter-spacing: 0.08em; }
+.subtitle { color: var(--text-dim); font-size: 15px; max-width: 760px; }
+
+/* Cards / glass */
+.glass { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); backdrop-filter: blur(var(--blur)); -webkit-backdrop-filter: blur(var(--blur)); box-shadow: var(--shadow-1); }
+.card { padding: 20px 22px; }
+
+/* KPI Grid */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 20px 0; }
+.kpi { padding: 18px 18px 16px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); transition: all .2s; }
+.kpi:hover { border-color: var(--border-strong); transform: translateY(-2px); box-shadow: var(--shadow-1); }
+.kpi-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-faint); margin-bottom: 8px; font-weight: 600; }
+.kpi-value { font-size: 24px; font-weight: 700; color: var(--accent); font-family: 'JetBrains Mono', monospace; line-height: 1.2; }
+.kpi-note { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+
+/* Tables */
+.table-wrap { margin: 16px 0; border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 12px 16px; background: rgba(255,255,255,0.03); color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; border-bottom: 1px solid var(--border); }
+td { padding: 12px 16px; border-top: 1px solid var(--border); color: var(--text); vertical-align: top; }
+td code { font-size: 12px; background: rgba(124,156,255,0.1); color: var(--accent-2); padding: 2px 6px; border-radius: 4px; }
+
+/* Callouts */
+.callout { padding: 14px 18px; border-radius: var(--radius-sm); border-left: 3px solid var(--info); background: rgba(124,156,255,0.06); margin: 16px 0; }
+.callout.info     { border-left-color: var(--info);   background: rgba(124,156,255,0.06); }
+.callout.warning  { border-left-color: var(--warn);   background: rgba(255,181,71,0.06); }
+.callout.critical { border-left-color: var(--danger); background: rgba(255,90,95,0.08); }
+.callout.outcome  { border-left-color: var(--success);background: rgba(64,224,167,0.06); }
+.callout-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+.callout-title::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
+.callout.info .callout-title    { color: var(--info); }
+.callout.warning .callout-title { color: var(--warn); }
+.callout.critical .callout-title{ color: var(--danger); }
+.callout.outcome .callout-title { color: var(--success); }
+.callout-body { font-size: 13px; color: var(--text); line-height: 1.55; }
+
+/* Timeline */
+.timeline { display: grid; gap: 12px; margin: 20px 0; }
+.timeline-row { display: grid; grid-template-columns: 48px 1fr; gap: 16px; align-items: start; padding: 14px 16px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--border); }
+.timeline-step { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #0a0b10; font-weight: 800; display: grid; place-items: center; font-family: 'JetBrains Mono', monospace; font-size: 14px; }
+.timeline-title { font-weight: 600; font-size: 14px; margin-bottom: 3px; }
+.timeline-body { font-size: 13px; color: var(--text-dim); }
+
+/* Code blocks */
+.code-block { margin: 16px 0; border-radius: var(--radius-sm); overflow: hidden; border: 1px solid var(--border); background: #0c0e15; }
+.code-head { padding: 8px 14px; background: rgba(255,255,255,0.03); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
+.code-lang { font-family: 'JetBrains Mono', monospace; color: var(--accent-2); }
+pre { padding: 14px 16px; font-size: 12.5px; line-height: 1.6; overflow-x: auto; color: #d4d4d8; }
+
+/* Lists */
+ul.styled, ol.styled { padding-left: 20px; margin: 12px 0; }
+ul.styled li, ol.styled li { padding: 4px 0; font-size: 13.5px; color: var(--text); }
+ul.styled li::marker { color: var(--accent); }
+ol.styled li::marker { color: var(--accent); font-weight: 700; }
+
+/* Section */
+.section { display: none; animation: fadeIn .35s ease; }
+.section.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Inspector */
+.insp-section { margin-bottom: 24px; }
+.insp-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--text-faint); margin-bottom: 10px; font-weight: 600; }
+.insp-meta { display: grid; gap: 10px; font-size: 12.5px; }
+.insp-row { display: grid; grid-template-columns: 90px 1fr; gap: 10px; }
+.insp-row .k { color: var(--text-faint); text-transform: uppercase; font-size: 10px; letter-spacing: 0.08em; padding-top: 2px; }
+.insp-row .v { color: var(--text); }
+.insp-term { padding: 10px 12px; border-radius: 8px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); margin-bottom: 8px; }
+.insp-term-name { font-weight: 600; font-size: 12px; color: var(--accent); font-family: 'JetBrains Mono', monospace; margin-bottom: 4px; }
+.insp-term-def { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+/* Slideshow */
+.slide-btn { position: fixed; bottom: 24px; right: 24px; z-index: 100; padding: 12px 18px; border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #0a0b10; font-weight: 700; font-size: 13px;
+  border: none; cursor: pointer; box-shadow: var(--shadow-2); display: flex; align-items: center; gap: 8px; transition: all .2s; }
+.slide-btn:hover { transform: translateY(-2px) scale(1.02); }
+.slideshow { position: fixed; inset: 0; z-index: 200; background: rgba(10,11,16,0.95); backdrop-filter: blur(30px); display: none; align-items: center; justify-content: center; padding: 40px; }
+.slideshow.open { display: flex; }
+.slide { width: 100%; max-width: 900px; aspect-ratio: 16/9; border-radius: 20px; border: 1px solid var(--border-strong); background: linear-gradient(135deg, rgba(28,33,48,0.9), rgba(22,26,38,0.9)); padding: 60px; display: flex; flex-direction: column; justify-content: center; animation: slideIn .4s ease; box-shadow: var(--shadow-2); }
+@keyframes slideIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+.slide-eyebrow { font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); margin-bottom: 20px; font-weight: 700; }
+.slide-title { font-size: 48px; font-weight: 800; letter-spacing: -0.02em; line-height: 1.1; margin-bottom: 20px; background: linear-gradient(135deg, #fff, var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.slide-big { font-size: 96px; font-weight: 800; color: var(--accent); font-family: 'JetBrains Mono', monospace; line-height: 1; margin: 20px 0; }
+.slide-body { font-size: 18px; color: var(--text-dim); max-width: 640px; line-height: 1.6; }
+.slide-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 24px; }
+.slide-stat { padding: 20px; background: rgba(255,255,255,0.04); border-radius: 12px; border: 1px solid var(--border); }
+.slide-stat-v { font-size: 36px; font-weight: 800; color: var(--accent); font-family: 'JetBrains Mono', monospace; }
+.slide-stat-l { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 6px; }
+.slide-nav { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); display: flex; gap: 16px; align-items: center; }
+.slide-nav button { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border-strong); background: rgba(255,255,255,0.05); color: var(--text); cursor: pointer; font-size: 18px; display: grid; place-items: center; transition: all .15s; }
+.slide-nav button:hover { background: rgba(255,255,255,0.1); border-color: var(--accent); }
+.slide-counter { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text-dim); min-width: 60px; text-align: center; }
+.slide-close { position: absolute; top: 24px; right: 24px; width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border-strong); background: rgba(255,255,255,0.05); color: var(--text); cursor: pointer; font-size: 20px; display: grid; place-items: center; }
+.slide-close:hover { border-color: var(--danger); color: var(--danger); }
+
+/* Badge */
+.badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; }
+.badge.live   { background: rgba(64,224,167,0.12); color: var(--success); border: 1px solid rgba(64,224,167,0.25); }
+.badge.danger { background: rgba(255,90,95,0.12); color: var(--danger); border: 1px solid rgba(255,90,95,0.25); }
+
+/* Print */
+@media print {
+  .sidebar, .inspector, .slide-btn, .slideshow { display: none !important; }
+  .app { grid-template-columns: 1fr; }
+  .section { display: block !important; page-break-after: always; }
+  body { background: #fff; color: #000; }
+  .glass, .kpi, .timeline-row, .code-block, .table-wrap { background: #fff; border: 1px solid #ddd; box-shadow: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">CCP</div>
+      <div>
+        <div class="brand-name">Claude Code Proxy</div>
+        <div class="brand-sub">OpsDoc v0.1</div>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+  </aside>
+
+  <!-- CONTENT -->
+  <main class="content">
+    <div class="page-header">
+      <span class="eyebrow">TECHNICAL OPERATIONS · 2026-04-05</span>
+      <h1>Claude Code Proxy</h1>
+      <p class="subtitle">FastAPI + LiteLLM proxy that translates Anthropic API requests to Azure OpenAI, OpenAI, Google, or Anthropic — running on port 8082 with single-shot Azure fallback.</p>
+    </div>
+    <div id="sections"></div>
+  </main>
+
+  <!-- INSPECTOR -->
+  <aside class="inspector">
+    <div class="insp-section">
+      <div class="insp-label">Metadata</div>
+      <div class="insp-meta" id="insp-meta"></div>
+    </div>
+    <div class="insp-section">
+      <div class="insp-label">Terminology</div>
+      <div id="insp-terms">
+        <div class="insp-term"><div class="insp-term-name">LiteLLM</div><div class="insp-term-def">Python library translating between LLM provider APIs (OpenAI, Anthropic, Azure, Gemini, etc.)</div></div>
+        <div class="insp-term"><div class="insp-term-name">Anthropic API</div><div class="insp-term-def">Native Claude Messages protocol; POST /v1/messages with role/content blocks.</div></div>
+        <div class="insp-term"><div class="insp-term-name">PREFERRED_PROVIDER</div><div class="insp-term-def">Env var selecting backend router: azure, openai, google, or anthropic.</div></div>
+        <div class="insp-term"><div class="insp-term-name">AZURE_DEPLOYMENT_MAP</div><div class="insp-term-def">JSON mapping logical model name to Azure deployment name (22 entries).</div></div>
+        <div class="insp-term"><div class="insp-term-name">_retried_with_azure</div><div class="insp-term-def">One-shot flag preventing infinite Azure fallback loops on Anthropic 404.</div></div>
+      </div>
+    </div>
+    <div class="insp-section">
+      <div class="insp-label">Cross-References</div>
+      <div class="insp-meta">
+        <div class="insp-row"><div class="k">Repo</div><div class="v mono">claude-code-proxy</div></div>
+        <div class="insp-row"><div class="k">Entry</div><div class="v mono">server.py</div></div>
+        <div class="insp-row"><div class="k">Port</div><div class="v mono">8082</div></div>
+        <div class="insp-row"><div class="k">Log</div><div class="v mono">/tmp/ccp-server.log</div></div>
+        <div class="insp-row"><div class="k">Policy</div><div class="v">LITELLM_VULNERABILITY_POLICY.md</div></div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<!-- Slideshow Button -->
+<button class="slide-btn" onclick="openSlideshow()">Executive Slideshow ▸</button>
+
+<!-- Slideshow Overlay -->
+<div class="slideshow" id="slideshow">
+  <button class="slide-close" onclick="closeSlideshow()">×</button>
+  <div id="slide-container"></div>
+  <div class="slide-nav">
+    <button onclick="prevSlide()">‹</button>
+    <div class="slide-counter" id="slide-counter">1 / 8</div>
+    <button onclick="nextSlide()">›</button>
+  </div>
+</div>
+
+<script>
+// ============ DATA (embedded sections + manifest) ============
+const MANIFEST = {
+  meta: {
+    title: "Claude Code Proxy — Operations Document",
+    project: "claude-code-proxy",
+    version: "0.1.0",
+    generated: "2026-04-05",
+    port: 8082,
+    owner: "jeremiah",
+    audience: "Technical",
+    mode: "technical"
+  },
+  navigation: [
+    { group: "EXECUTIVE",     items: ["overview", "kpis"] },
+    { group: "ARCHITECTURE",  items: ["server", "request-flow", "fallback"] },
+    { group: "CONFIGURATION", items: ["env-matrix", "azure-map", "model-tiers"] },
+    { group: "OPERATIONS",    items: ["cli", "menubar", "switcher", "launchagents"] },
+    { group: "SECURITY",      items: ["litellm-policy", "cves", "detection"] },
+    { group: "RUNBOOK",       items: ["runbook", "troubleshoot"] }
+  ]
+};
+
+const SECTIONS = {
+  "overview": { title: "Executive Overview", category: "EXECUTIVE", blocks: [
+    { type: "overview", title: "Purpose",
+      description: "Drop-in Anthropic API translator. Clients point ANTHROPIC_BASE_URL at the proxy and continue to speak native Anthropic Messages protocol while requests are routed to the configured backend.",
+      methodology: "FastAPI receives POST /v1/messages, converts to LiteLLM schema, dispatches to backend, converts response back to Anthropic format." },
+    { type: "callout", variant: "info", title: "Client Connection", body: "ANTHROPIC_BASE_URL=http://localhost:8082 claude" }
+  ]},
+  "kpis": { title: "Key Metrics", category: "EXECUTIVE", blocks: [
+    { type: "kpis", items: [
+      { label: "Listen Port", value: "8082", note: "FastAPI + uvicorn" },
+      { label: "Server LOC", value: "~1,771", note: "server.py" },
+      { label: "Backends", value: "4", note: "Azure · OpenAI · Google · Anthropic" },
+      { label: "Azure Deployments", value: "22", note: "AZURE_DEPLOYMENT_MAP" },
+      { label: "LiteLLM Range", value: ">=1.77.7,<1.82.0", note: "Supply-chain pinned" },
+      { label: "Python", value: ">=3.10", note: "3.11.7 recommended" }
+    ]}
+  ]},
+  "server": { title: "Server Architecture", category: "ARCHITECTURE", blocks: [
+    { type: "overview", title: "FastAPI + LiteLLM Core",
+      description: "server.py is a single-file FastAPI application (~1,771 lines) that exposes Anthropic-compatible endpoints and proxies them through LiteLLM to backend providers.",
+      methodology: "Entry: uv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload" },
+    { type: "table", title: "Core Endpoints", columns: ["Method", "Path", "Purpose"], rows: [
+      ["GET", "/", "Health check"],
+      ["POST", "/v1/messages", "Anthropic Messages API entrypoint"],
+      ["POST", "/v1/messages/count_tokens", "Token counting endpoint"]
+    ]},
+    { type: "table", title: "Runtime Files", columns: ["File", "Purpose"], rows: [
+      ["server.py", "Main FastAPI + LiteLLM translator (~1771 lines)"],
+      [".env", "Runtime configuration (gitignored)"],
+      [".env.example", "Template with all available variables"],
+      ["pyproject.toml", "Deps: litellm>=1.77.7,<1.82.0, fastapi, uvicorn"],
+      ["/tmp/ccp-server.log", "Runtime log output"]
+    ]}
+  ]},
+  "request-flow": { title: "Request Flow", category: "ARCHITECTURE", blocks: [
+    { type: "timeline", phases: [
+      { step: "1", title: "Receive", body: "Client POSTs Anthropic-format message to /v1/messages" },
+      { step: "2", title: "Translate In", body: "convert_anthropic_to_litellm() maps schema + remaps model tier" },
+      { step: "3", title: "Dispatch", body: "LiteLLM routes to backend based on PREFERRED_PROVIDER" },
+      { step: "4", title: "Backend Call", body: "Azure OpenAI / OpenAI / Google / Anthropic executes completion" },
+      { step: "5", title: "Translate Out", body: "convert_litellm_to_anthropic() rebuilds Anthropic response envelope" },
+      { step: "6", title: "Return", body: "Client receives native Anthropic response (streaming or unary)" }
+    ]}
+  ]},
+  "fallback": { title: "Azure Fallback Logic", category: "ARCHITECTURE", blocks: [
+    { type: "callout", variant: "outcome", title: "Fallback Trigger", body: "If ANTHROPIC_API_KEY is missing OR Anthropic returns 404 for a model, proxy retries once on Azure OpenAI using the Azure deployment map." },
+    { type: "list", style: "ordered", items: [
+      "Attempt primary dispatch (Anthropic when PREFERRED_PROVIDER=anthropic)",
+      "On 404: set _retried_with_azure=True (prevents loop)",
+      "Rewrite model to Azure deployment via AZURE_DEPLOYMENT_MAP",
+      "Retry once via LiteLLM azure/<deployment> route",
+      "If Azure also fails: surface original error to client"
+    ]},
+    { type: "callout", variant: "warning", title: "Loop Guard", body: "The _retried_with_azure flag is the single protection against infinite fallback loops. Never remove without replacing with equivalent one-shot semantics." }
+  ]},
+  "env-matrix": { title: ".env Configuration Matrix", category: "CONFIGURATION", blocks: [
+    { type: "table", title: "Provider Selection", columns: ["Variable", "Purpose", "Example"], rows: [
+      ["PREFERRED_PROVIDER", "Backend router: azure | openai | google | anthropic", "azure"],
+      ["OPENAI_BASE_URL", "OpenAI API endpoint", "https://api.openai.com/v1"],
+      ["USE_VERTEX_AUTH", "Use ADC for Gemini via Vertex", "true"]
+    ]},
+    { type: "table", title: "Model Tier Mapping", columns: ["Variable", "Claude Tier", "Current Default"], rows: [
+      ["SMALL_MODEL", "haiku", "gpt-4o"],
+      ["BIG_MODEL", "sonnet", "gpt-4.1"],
+      ["FRONTIER_MODEL", "opus", "gpt-5.2"]
+    ]},
+    { type: "table", title: "Credentials & Client Auth", columns: ["Variable", "Purpose"], rows: [
+      ["ANTHROPIC_API_KEY", "Required only when proxying to Anthropic"],
+      ["OPENAI_API_KEY", "Required when PREFERRED_PROVIDER=openai"],
+      ["GEMINI_API_KEY", "Required when PREFERRED_PROVIDER=google (non-Vertex)"],
+      ["AZURE_API_KEY", "Required when PREFERRED_PROVIDER=azure (or fallback)"],
+      ["AZURE_API_BASE", "https://<resource>.openai.azure.com/"],
+      ["AZURE_API_VERSION", "Defaults to 2025-04-01-preview"],
+      ["PROXY_API_KEY", "Optional: gate clients with proxy-local key"]
+    ]}
+  ]},
+  "azure-map": { title: "Azure Deployment Map", category: "CONFIGURATION", blocks: [
+    { type: "callout", variant: "info", title: "AZURE_DEPLOYMENT_MAP", body: "JSON object mapping logical model names to Azure deployment names. 22 entries cover the current Azure OpenAI catalog." },
+    { type: "table", title: "SKU Classification (as of Jan 2026)", columns: ["SKU", "Models"], rows: [
+      ["Standard (regional)", "gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini, o1, o4-mini"],
+      ["GlobalStandard", "gpt-4.1-nano, gpt-5, gpt-5-mini, gpt-5-chat, gpt-5.1-chat, gpt-5.2-chat, o3-mini, o3, codex-mini, gpt-audio, gpt-audio-mini, model-router"],
+      ["DataZoneStandard", "gpt-5-nano (cap 1), gpt-5.1 (cap 1)"],
+      ["GlobalStandard (low quota)", "gpt-5.2 (cap 1), gpt-5.2-codex (cap 1)"],
+      ["Not deployable", "gpt-5-codex, gpt-5.1-codex*, o1-mini (deprecated), o3-pro, gpt-5-pro"]
+    ]},
+    { type: "code", language: "json", title: "Example AZURE_DEPLOYMENT_MAP",
+      body: '{\n  "gpt-4o": "gpt-4o",\n  "gpt-4.1": "gpt-4-1",\n  "gpt-5": "gpt-5",\n  "gpt-5.2": "gpt-5-2",\n  "gpt-5.2-codex": "gpt-5-2-codex",\n  "o3": "o3",\n  "o4-mini": "o4-mini"\n}' }
+  ]},
+  "model-tiers": { title: "Model Tier Strategy", category: "CONFIGURATION", blocks: [
+    { type: "table", title: "Current Production Mapping (Azure)", columns: ["Claude Tier", "Env Var", "Azure Model", "Use Case"], rows: [
+      ["haiku", "SMALL_MODEL", "gpt-4o", "Fast / cheap utility calls"],
+      ["sonnet", "BIG_MODEL", "gpt-4.1", "Standard coding workloads"],
+      ["opus", "FRONTIER_MODEL", "gpt-5.2", "Top-tier reasoning"]
+    ]},
+    { type: "callout", variant: "info", title: "Open-Source Roadmap", body: "Formation completed 2026-04-03: Deepseek-V3 (frontier), Qwen2.5-72B (big), Phi-4 (small) identified as open-source replacements. Self-hosted cost ~$0.80-1.50/1M tokens vs $3.00+ API." }
+  ]},
+  "cli": { title: "ccp-litellm CLI", category: "OPERATIONS", blocks: [
+    { type: "table", title: "Commands", columns: ["Command", "Action"], rows: [
+      ["ccp-litellm start", "Launch uvicorn server in background"],
+      ["ccp-litellm stop", "Kill running proxy process"],
+      ["ccp-litellm restart", "Stop + start"],
+      ["ccp-litellm status", "Report PID, port, health"],
+      ["ccp-litellm log", "Tail /tmp/ccp-server.log"],
+      ["ccp-litellm troubleshoot", "Port scan + config dump"],
+      ["ccp", "Legacy alias (start only)"]
+    ]},
+    { type: "callout", variant: "info", title: "Slash Command", body: "/ccp-litellm [start|stop|restart|status|log|troubleshoot] — mirrors the CLI via Claude Code skill." }
+  ]},
+  "menubar": { title: "CCP LiteLLM Menu Bar App", category: "OPERATIONS", blocks: [
+    { type: "overview", title: "Native macOS Menu Bar Control",
+      description: "Swift/AppKit menu bar utility at ~/Applications/CCP LiteLLM.app providing live status indicator, model configuration, and login-item toggles.",
+      methodology: "Source: CcpMenuBar.swift, CcpModels.swift. Rebuild via: bash build-menubar.sh" },
+    { type: "list", style: "unordered", items: [
+      "Live status dot: green (healthy) | red (down) | amber (starting)",
+      "Model Manager: browse Azure catalog, deploy via az CLI",
+      "Login-item toggles for both LaunchAgents",
+      "Quick-switch BIG/SMALL/FRONTIER without editing .env"
+    ]}
+  ]},
+  "switcher": { title: "ccp-switcher TUI", category: "OPERATIONS", blocks: [
+    { type: "overview", title: "Interactive Terminal Model Switcher",
+      description: "Bash TUI at ./ccp-switcher for rapid model tier reconfiguration without opening .env.",
+      methodology: "Modifies BIG_MODEL, SMALL_MODEL, FRONTIER_MODEL in .env and triggers restart." },
+    { type: "callout", variant: "info", title: "Usage", body: "./ccp-switcher — arrow keys navigate tiers, enter selects from candidates list." }
+  ]},
+  "launchagents": { title: "LaunchAgents (macOS Autostart)", category: "OPERATIONS", blocks: [
+    { type: "table", title: "Registered Agents", columns: ["Label", "Plist Path", "Purpose"], rows: [
+      ["com.ccp.litellm.proxy", "~/Library/LaunchAgents/com.ccp.litellm.proxy.plist", "Start FastAPI proxy at login"],
+      ["com.ccp.litellm.menubar", "~/Library/LaunchAgents/com.ccp.litellm.menubar.plist", "Start menu bar app at login"]
+    ]},
+    { type: "code", language: "bash", title: "Manual Bootstrap",
+      body: "launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccp.litellm.proxy.plist\nlaunchctl bootout gui/$(id -u)/com.ccp.litellm.proxy" },
+    { type: "callout", variant: "warning", title: "Expected Port :8082 Triple-PID",
+      body: "When menu bar app is running, troubleshoot shows 3 PIDs on :8082 — uvicorn main, uvicorn watcher, menu bar health-check socket. This is NORMAL." }
+  ]},
+  "litellm-policy": { title: "LiteLLM Supply Chain Policy", category: "SECURITY", blocks: [
+    { type: "callout", variant: "critical", title: "ACTIVE SUPPLY CHAIN THREAT",
+      body: "LiteLLM versions 1.82.7 and 1.82.8 were compromised by threat actor TeamPCP (March 24, 2026) via Trivy CI/CD breach. NEVER install these versions." },
+    { type: "table", title: "Version Constraint (pyproject.toml)", columns: ["Range", "Status"], rows: [
+      [">=1.77.7,<1.82.0", "PINNED (active constraint)"],
+      ["1.82.7, 1.82.8", "BANNED — credential stealer + RCE dropper"],
+      ["1.40.3-1.40.12", "BANNED — CVE-2024-6825 (RCE)"],
+      ["<1.56.2", "BANNED — CVE-2024-8984 (DoS)"]
+    ]},
+    { type: "list", style: "unordered", items: [
+      "Payload 1.82.7: base64-encoded code injected into litellm/proxy/proxy_server.py",
+      "Payload 1.82.8: malicious litellm_init.pth (34,628 bytes), auto-executes on interpreter startup",
+      "Capability: steals SSH keys, cloud creds, env vars, CI/CD tokens",
+      "Dropper: systemd persistence + Kubernetes privilege escalation tools"
+    ]}
+  ]},
+  "cves": { title: "CVE Mitigation", category: "SECURITY", blocks: [
+    { type: "table", title: "CVEs Mitigated by Current Pin", columns: ["CVE", "Severity", "Affected", "Status"], rows: [
+      ["CVE-2024-6825", "CRITICAL (RCE)", "1.40.3-1.40.12", "PROTECTED (>=1.77.7)"],
+      ["CVE-2024-8984", "HIGH (DoS)", "<1.56.2", "PROTECTED (>=1.77.7)"],
+      ["Supply chain (TeamPCP)", "CRITICAL", "1.82.7-1.82.8", "PROTECTED (<1.82.0)"]
+    ]}
+  ]},
+  "detection": { title: "Incident Detection & Response", category: "SECURITY", blocks: [
+    { type: "callout", variant: "critical", title: "If 1.82.7 or 1.82.8 ever installed — IMMEDIATE ACTIONS",
+      body: "Assume full environment compromise. Rotate all secrets, audit CloudTrail/Azure logs, and review git history before continuing work." },
+    { type: "list", style: "ordered", items: [
+      "Rotate AWS access keys and session tokens",
+      "Rotate GCP service account keys",
+      "Rotate Azure credentials (client secrets, managed identities)",
+      "Rotate SSH private keys on all machines that touched venv",
+      "Rotate CI/CD tokens (GitHub Actions, Azure DevOps, etc.)",
+      "Audit CloudTrail / Azure Activity Log for unauthorized API calls",
+      "Review git history for suspicious commits",
+      "Run pip audit across all venvs for other compromised packages",
+      "Document incident timeline in security review log"
+    ]},
+    { type: "code", language: "bash", title: "Detection One-Liner",
+      body: "pip show litellm | grep Version\nfind ~ -name 'litellm_init.pth' 2>/dev/null\npip list 2>&1 | grep -E 'litellm\\s+1\\.82\\.(7|8)'" }
+  ]},
+  "runbook": { title: "Operations Runbook", category: "RUNBOOK", blocks: [
+    { type: "code", language: "bash", title: "Start Server (foreground)",
+      body: "cd /Users/jeremiah/Developer/claude-code-proxy\nuv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload" },
+    { type: "code", language: "bash", title: "Start / Stop via CLI",
+      body: "ccp-litellm start\nccp-litellm status\nccp-litellm log\nccp-litellm stop" },
+    { type: "code", language: "bash", title: "Health Check",
+      body: 'curl -s http://localhost:8082/\n# -> {"message": "Anthropic Proxy for LiteLLM"}' },
+    { type: "code", language: "bash", title: "Connect Claude Code",
+      body: "ANTHROPIC_BASE_URL=http://localhost:8082 claude" }
+  ]},
+  "troubleshoot": { title: "Troubleshooting", category: "RUNBOOK", blocks: [
+    { type: "table", title: "Common Failures", columns: ["Symptom", "Cause", "Fix"], rows: [
+      ["404 on first call", "Model not in AZURE_DEPLOYMENT_MAP", "Add mapping entry, restart"],
+      ["Loop of Azure retries", "_retried_with_azure flag missing", "Verify fallback guard in server.py"],
+      ["3 PIDs on :8082", "Menu bar app health probe", "Expected — ignore"],
+      ["Client auth failure", "PROXY_API_KEY mismatch", "Sync client x-api-key header with .env"],
+      ["Gemini 403", "Missing GEMINI_API_KEY or ADC", "Set key or USE_VERTEX_AUTH=true"],
+      ["ANTHROPIC_API_KEY missing warning", "Fallback to Azure engaged", "Intentional — confirms fallback path"]
+    ]},
+    { type: "callout", variant: "info", title: "Support Paths",
+      body: "Log: /tmp/ccp-server.log | Source: server.py | Config: .env | Tests: tests/ + tests.py" }
+  ]}
+};
+
+// ============ RENDER ENGINE ============
+const HANDLERS = {
+  overview: b => `<div class="glass card"><h3>${b.title}</h3><p style="color:var(--text-dim);margin-bottom:10px">${b.description}</p>${b.methodology ? `<p class="mono" style="font-size:12px;color:var(--text-faint)">${b.methodology}</p>` : ""}</div>`,
+  kpis: b => `<div class="kpi-grid">${b.items.map(k => `<div class="kpi"><div class="kpi-label">${k.label}</div><div class="kpi-value">${k.value}</div>${k.note ? `<div class="kpi-note">${k.note}</div>` : ""}</div>`).join("")}</div>`,
+  callout: b => `<div class="callout ${b.variant||'info'}"><div class="callout-title">${b.title}</div><div class="callout-body">${b.body}</div></div>`,
+  table: b => `<div>${b.title ? `<h3>${b.title}</h3>` : ""}<div class="table-wrap"><table><thead><tr>${b.columns.map(c=>`<th>${c}</th>`).join("")}</tr></thead><tbody>${b.rows.map(r=>`<tr>${r.map(c=>`<td>${/^[A-Z_][A-Z0-9_.-]*$/.test(c)||c.includes('/')||c.includes('.py')?`<code>${c}</code>`:c}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`,
+  timeline: b => `<div class="timeline">${b.phases.map(p => `<div class="timeline-row"><div class="timeline-step">${p.step}</div><div><div class="timeline-title">${p.title}</div><div class="timeline-body">${p.body}</div></div></div>`).join("")}</div>`,
+  code: b => `<div class="code-block"><div class="code-head"><span>${b.title||''}</span><span class="code-lang">${b.language||'text'}</span></div><pre>${b.body.replace(/</g,'&lt;')}</pre></div>`,
+  list: b => {
+    const tag = b.style === "ordered" ? "ol" : "ul";
+    return `<${tag} class="styled">${b.items.map(i=>`<li>${i}</li>`).join("")}</${tag}>`;
+  }
+};
+
+function renderSection(id, data) {
+  const body = data.blocks.map(b => HANDLERS[b.type] ? HANDLERS[b.type](b) : "").join("");
+  return `<section class="section" data-id="${id}"><h2>${data.title}</h2>${body}</section>`;
+}
+
+function renderNav() {
+  const nav = document.getElementById("nav");
+  nav.innerHTML = MANIFEST.navigation.map(g => `
+    <div class="nav-group">
+      <div class="nav-group-label">${g.group}</div>
+      ${g.items.map(id => `<div class="nav-item" data-target="${id}">${SECTIONS[id]?.title||id}</div>`).join("")}
+    </div>`).join("");
+  nav.addEventListener("click", e => {
+    const item = e.target.closest(".nav-item");
+    if (!item) return;
+    showSection(item.dataset.target);
+  });
+}
+
+function renderSections() {
+  document.getElementById("sections").innerHTML =
+    Object.entries(SECTIONS).map(([id, s]) => renderSection(id, s)).join("");
+}
+
+function showSection(id) {
+  document.querySelectorAll(".section").forEach(s => s.classList.toggle("active", s.dataset.id === id));
+  document.querySelectorAll(".nav-item").forEach(n => n.classList.toggle("active", n.dataset.target === id));
+  updateInspector(id);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function updateInspector(id) {
+  const s = SECTIONS[id];
+  if (!s) return;
+  document.getElementById("insp-meta").innerHTML = `
+    <div class="insp-row"><div class="k">Section</div><div class="v">${s.title}</div></div>
+    <div class="insp-row"><div class="k">Category</div><div class="v">${s.category}</div></div>
+    <div class="insp-row"><div class="k">Blocks</div><div class="v mono">${s.blocks.length}</div></div>
+    <div class="insp-row"><div class="k">Updated</div><div class="v mono">${MANIFEST.meta.generated}</div></div>`;
+}
+
+// ============ SLIDESHOW ============
+const SLIDES = [
+  { type: "intro", eyebrow: "CLAUDE CODE PROXY · 2026", title: "Anthropic → Everywhere", body: "A FastAPI + LiteLLM proxy translating native Anthropic protocol to Azure OpenAI, OpenAI, Google, and Anthropic — running on port 8082." },
+  { type: "stat", eyebrow: "SCALE", big: "8082", title: "Listen Port", body: "Single-file FastAPI service (~1,771 LOC) with hot-reload via uvicorn." },
+  { type: "grid", eyebrow: "BACKENDS", title: "4 Providers, 1 Protocol", stats: [
+    { v: "Azure", l: "22 deployments" }, { v: "OpenAI", l: "native" }, { v: "Google", l: "Gemini + Vertex" }, { v: "Anthropic", l: "passthrough" }] },
+  { type: "stat", eyebrow: "MODEL MAPPING", big: "3 Tiers", title: "Haiku · Sonnet · Opus", body: "SMALL_MODEL=gpt-4o · BIG_MODEL=gpt-4.1 · FRONTIER_MODEL=gpt-5.2" },
+  { type: "stat", eyebrow: "RESILIENCE", big: "1-Shot", title: "Azure Fallback", body: "On Anthropic 404 or missing key, proxy retries once on Azure. _retried_with_azure flag guarantees loop-free recovery." },
+  { type: "stat", eyebrow: "SECURITY", big: "BANNED", title: "LiteLLM 1.82.7 / 1.82.8", body: "Supply-chain attack (TeamPCP, March 2026). Constraint: >=1.77.7,<1.82.0 — blocks credential stealer, preserves CVE fixes." },
+  { type: "grid", eyebrow: "CVE COVERAGE", title: "Mitigations Active", stats: [
+    { v: "CVE-2024-6825", l: "RCE — protected" }, { v: "CVE-2024-8984", l: "DoS — protected" }, { v: "TeamPCP", l: "Supply chain — blocked" }, { v: "100%", l: "Known-CVE coverage" }] },
+  { type: "intro", eyebrow: "OPERATIONS", title: "3 Control Surfaces", body: "ccp-litellm CLI · CCP LiteLLM menu bar app (macOS) · ccp-switcher TUI. Two LaunchAgents autostart the stack at login." }
+];
+
+let slideIdx = 0;
+function renderSlide(s) {
+  if (s.type === "intro") {
+    return `<div class="slide"><div class="slide-eyebrow">${s.eyebrow}</div><div class="slide-title">${s.title}</div><div class="slide-body">${s.body}</div></div>`;
+  } else if (s.type === "stat") {
+    return `<div class="slide"><div class="slide-eyebrow">${s.eyebrow}</div><div class="slide-big">${s.big}</div><div class="slide-title" style="font-size:32px">${s.title}</div><div class="slide-body">${s.body}</div></div>`;
+  } else if (s.type === "grid") {
+    return `<div class="slide"><div class="slide-eyebrow">${s.eyebrow}</div><div class="slide-title" style="font-size:36px">${s.title}</div><div class="slide-grid">${s.stats.map(x => `<div class="slide-stat"><div class="slide-stat-v">${x.v}</div><div class="slide-stat-l">${x.l}</div></div>`).join("")}</div></div>`;
+  }
+  return "";
+}
+function showSlide() {
+  document.getElementById("slide-container").innerHTML = renderSlide(SLIDES[slideIdx]);
+  document.getElementById("slide-counter").textContent = `${slideIdx + 1} / ${SLIDES.length}`;
+}
+function openSlideshow() { document.getElementById("slideshow").classList.add("open"); slideIdx = 0; showSlide(); }
+function closeSlideshow() { document.getElementById("slideshow").classList.remove("open"); }
+function nextSlide() { slideIdx = (slideIdx + 1) % SLIDES.length; showSlide(); }
+function prevSlide() { slideIdx = (slideIdx - 1 + SLIDES.length) % SLIDES.length; showSlide(); }
+document.addEventListener("keydown", e => {
+  if (!document.getElementById("slideshow").classList.contains("open")) return;
+  if (e.key === "ArrowRight") nextSlide();
+  if (e.key === "ArrowLeft") prevSlide();
+  if (e.key === "Escape") closeSlideshow();
+});
+
+// ============ BOOT ============
+renderNav();
+renderSections();
+showSection("overview");
+</script>
+</body>
+</html>

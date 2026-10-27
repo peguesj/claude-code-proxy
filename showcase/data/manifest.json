@@ -1,0 +1,32 @@
+{
+  "project": "claude-code-proxy",
+  "slug": "ccp-litellm",
+  "title": "CCP LiteLLM Proxy",
+  "tagline": "Anthropic-compatible proxy translating to Azure OpenAI, OpenAI, Google & Anthropic via LiteLLM",
+  "version": "1.0.0",
+  "template": "engine",
+  "layout": "3-column",
+  "style": "GIMME",
+  "audience": "partner",
+  "redaction_level": "moderate",
+  "branch": "fix/azure-fallback-anthropic-missing",
+  "commit": "30c631c",
+  "port": 8082,
+  "apm_port": 3031,
+  "generated_at": "2026-04-05",
+  "repo": "/Users/jeremiah/Developer/claude-code-proxy",
+  "stack": {
+    "language": "Python 3.11",
+    "server": "FastAPI + Uvicorn",
+    "translation": "LiteLLM >=1.77.7,<1.82.0",
+    "menubar": "Swift / AppKit",
+    "tui": "Bash",
+    "config": ".env + AZURE_DEPLOYMENT_MAP"
+  },
+  "endpoints": {
+    "base": "http://localhost:8082",
+    "messages": "POST /v1/messages",
+    "health": "GET /",
+    "apm_dashboard": "http://localhost:3031"
+  }
+}

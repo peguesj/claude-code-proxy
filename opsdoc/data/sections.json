@@ -1,0 +1,442 @@
+{
+  "sections": {
+    "overview": {
+      "title": "Executive Overview",
+      "category": "EXECUTIVE",
+      "summary": "Claude Code Proxy translates Anthropic-format API requests to multiple LLM backends (Azure OpenAI, OpenAI, Google, Anthropic) via LiteLLM. It runs as a local FastAPI service on port 8082, enabling the Claude Code CLI to transparently use alternative providers.",
+      "blocks": [
+        {
+          "type": "overview",
+          "title": "Purpose",
+          "description": "Drop-in Anthropic API translator. Clients point ANTHROPIC_BASE_URL at the proxy and continue to speak native Anthropic Messages protocol while requests are routed to the configured backend.",
+          "methodology": "FastAPI receives POST /v1/messages, converts to LiteLLM schema, dispatches to backend, converts response back to Anthropic format."
+        },
+        {
+          "type": "callout",
+          "variant": "info",
+          "title": "Client Connection",
+          "body": "ANTHROPIC_BASE_URL=http://localhost:8082 claude"
+        }
+      ]
+    },
+    "kpis": {
+      "title": "Key Metrics",
+      "category": "EXECUTIVE",
+      "blocks": [
+        {
+          "type": "kpis",
+          "items": [
+            { "label": "Listen Port", "value": "8082", "note": "FastAPI + uvicorn" },
+            { "label": "Server LOC", "value": "~1,771", "note": "server.py" },
+            { "label": "Backends", "value": "4", "note": "Azure, OpenAI, Google, Anthropic" },
+            { "label": "Azure Deployments", "value": "22", "note": "AZURE_DEPLOYMENT_MAP" },
+            { "label": "LiteLLM Range", "value": ">=1.77.7,<1.82.0", "note": "Supply-chain pinned" },
+            { "label": "Python", "value": ">=3.10", "note": "3.11.7 recommended" }
+          ]
+        }
+      ]
+    },
+    "server": {
+      "title": "Server Architecture",
+      "category": "ARCHITECTURE",
+      "blocks": [
+        {
+          "type": "overview",
+          "title": "FastAPI + LiteLLM Core",
+          "description": "server.py is a single-file FastAPI application (~1,771 lines) that exposes Anthropic-compatible endpoints and proxies them through LiteLLM to backend providers.",
+          "methodology": "Entry: uv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload"
+        },
+        {
+          "type": "table",
+          "title": "Core Endpoints",
+          "columns": ["Method", "Path", "Purpose"],
+          "rows": [
+            ["GET", "/", "Health check -> {\"message\":\"Anthropic Proxy for LiteLLM\"}"],
+            ["POST", "/v1/messages", "Anthropic Messages API entrypoint"],
+            ["POST", "/v1/messages/count_tokens", "Token counting endpoint"]
+          ]
+        },
+        {
+          "type": "table",
+          "title": "Runtime Files",
+          "columns": ["File", "Purpose"],
+          "rows": [
+            ["server.py", "Main FastAPI + LiteLLM translator (~1771 lines)"],
+            [".env", "Runtime configuration (gitignored)"],
+            [".env.example", "Template with all available variables"],
+            ["pyproject.toml", "Deps: litellm>=1.77.7,<1.82.0, fastapi, uvicorn"],
+            ["/tmp/ccp-server.log", "Runtime log output"]
+          ]
+        }
+      ]
+    },
+    "request-flow": {
+      "title": "Request Flow",
+      "category": "ARCHITECTURE",
+      "blocks": [
+        {
+          "type": "timeline",
+          "phases": [
+            { "step": "1", "title": "Receive", "body": "Client POSTs Anthropic-format message to /v1/messages" },
+            { "step": "2", "title": "Translate In", "body": "convert_anthropic_to_litellm() maps schema + remaps model tier" },
+            { "step": "3", "title": "Dispatch", "body": "LiteLLM routes to backend based on PREFERRED_PROVIDER" },
+            { "step": "4", "title": "Backend Call", "body": "Azure OpenAI / OpenAI / Google / Anthropic executes completion" },
+            { "step": "5", "title": "Translate Out", "body": "convert_litellm_to_anthropic() rebuilds Anthropic response envelope" },
+            { "step": "6", "title": "Return", "body": "Client receives native Anthropic response (streaming or unary)" }
+          ]
+        }
+      ]
+    },
+    "fallback": {
+      "title": "Azure Fallback Logic",
+      "category": "ARCHITECTURE",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "outcome",
+          "title": "Fallback Trigger",
+          "body": "If ANTHROPIC_API_KEY is missing OR Anthropic returns 404 for a model, proxy retries once on Azure OpenAI using the Azure deployment map."
+        },
+        {
+          "type": "list",
+          "style": "ordered",
+          "items": [
+            "Attempt primary dispatch (Anthropic when PREFERRED_PROVIDER=anthropic)",
+            "On 404: set _retried_with_azure=True (prevents loop)",
+            "Rewrite model to Azure deployment via AZURE_DEPLOYMENT_MAP",
+            "Retry once via LiteLLM azure/<deployment> route",
+            "If Azure also fails: surface original error to client"
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Loop Guard",
+          "body": "The _retried_with_azure flag is the single protection against infinite fallback loops. Never remove without replacing with equivalent one-shot semantics."
+        }
+      ]
+    },
+    "env-matrix": {
+      "title": ".env Configuration Matrix",
+      "category": "CONFIGURATION",
+      "blocks": [
+        {
+          "type": "table",
+          "title": "Provider Selection",
+          "columns": ["Variable", "Purpose", "Example"],
+          "rows": [
+            ["PREFERRED_PROVIDER", "Backend router: azure | openai | google | anthropic", "azure"],
+            ["OPENAI_BASE_URL", "OpenAI API endpoint", "https://api.openai.com/v1"],
+            ["USE_VERTEX_AUTH", "Use ADC for Gemini via Vertex", "true"]
+          ]
+        },
+        {
+          "type": "table",
+          "title": "Model Tier Mapping",
+          "columns": ["Variable", "Claude Tier", "Current Default"],
+          "rows": [
+            ["SMALL_MODEL", "haiku", "gpt-4o"],
+            ["BIG_MODEL", "sonnet", "gpt-4.1"],
+            ["FRONTIER_MODEL", "opus", "gpt-5.2"]
+          ]
+        },
+        {
+          "type": "table",
+          "title": "Credentials & Client Auth",
+          "columns": ["Variable", "Purpose"],
+          "rows": [
+            ["ANTHROPIC_API_KEY", "Required only when proxying to Anthropic"],
+            ["OPENAI_API_KEY", "Required when PREFERRED_PROVIDER=openai"],
+            ["GEMINI_API_KEY", "Required when PREFERRED_PROVIDER=google (non-Vertex)"],
+            ["AZURE_API_KEY", "Required when PREFERRED_PROVIDER=azure (or fallback)"],
+            ["AZURE_API_BASE", "https://<resource>.openai.azure.com/"],
+            ["AZURE_API_VERSION", "Defaults to 2025-04-01-preview"],
+            ["PROXY_API_KEY", "Optional: gate clients with proxy-local key"]
+          ]
+        }
+      ]
+    },
+    "azure-map": {
+      "title": "Azure Deployment Map",
+      "category": "CONFIGURATION",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "info",
+          "title": "AZURE_DEPLOYMENT_MAP",
+          "body": "JSON object mapping logical model names to Azure deployment names. 22 entries cover the current Azure OpenAI catalog."
+        },
+        {
+          "type": "table",
+          "title": "SKU Classification (as of Jan 2026)",
+          "columns": ["SKU", "Models"],
+          "rows": [
+            ["Standard (regional)", "gpt-4o, gpt-4o-mini, gpt-4.1, gpt-4.1-mini, o1, o4-mini"],
+            ["GlobalStandard", "gpt-4.1-nano, gpt-5, gpt-5-mini, gpt-5-chat, gpt-5.1-chat, gpt-5.2-chat, o3-mini, o3, codex-mini, gpt-audio, gpt-audio-mini, model-router"],
+            ["DataZoneStandard", "gpt-5-nano (cap 1), gpt-5.1 (cap 1)"],
+            ["GlobalStandard (low quota)", "gpt-5.2 (cap 1), gpt-5.2-codex (cap 1)"],
+            ["Not deployable", "gpt-5-codex, gpt-5.1-codex*, o1-mini (deprecated), o3-pro, gpt-5-pro"]
+          ]
+        },
+        {
+          "type": "code",
+          "language": "json",
+          "title": "Example AZURE_DEPLOYMENT_MAP",
+          "body": "{\n  \"gpt-4o\": \"gpt-4o\",\n  \"gpt-4.1\": \"gpt-4-1\",\n  \"gpt-5\": \"gpt-5\",\n  \"gpt-5.2\": \"gpt-5-2\",\n  \"gpt-5.2-codex\": \"gpt-5-2-codex\",\n  \"o3\": \"o3\",\n  \"o4-mini\": \"o4-mini\"\n}"
+        }
+      ]
+    },
+    "model-tiers": {
+      "title": "Model Tier Strategy",
+      "category": "CONFIGURATION",
+      "blocks": [
+        {
+          "type": "table",
+          "title": "Current Production Mapping (Azure)",
+          "columns": ["Claude Tier", "Env Var", "Azure Model", "Use Case"],
+          "rows": [
+            ["haiku", "SMALL_MODEL", "gpt-4o", "Fast / cheap utility calls"],
+            ["sonnet", "BIG_MODEL", "gpt-4.1", "Standard coding workloads"],
+            ["opus", "FRONTIER_MODEL", "gpt-5.2", "Top-tier reasoning"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "info",
+          "title": "Open-Source Roadmap",
+          "body": "Formation completed 2026-04-03: Deepseek-V3 (frontier), Qwen2.5-72B (big), Phi-4 (small) identified as open-source replacements. Self-hosted cost ~$0.80-1.50/1M tokens vs $3.00+ API."
+        }
+      ]
+    },
+    "cli": {
+      "title": "ccp-litellm CLI",
+      "category": "OPERATIONS",
+      "blocks": [
+        {
+          "type": "table",
+          "title": "Commands",
+          "columns": ["Command", "Action"],
+          "rows": [
+            ["ccp-litellm start", "Launch uvicorn server in background"],
+            ["ccp-litellm stop", "Kill running proxy process"],
+            ["ccp-litellm restart", "Stop + start"],
+            ["ccp-litellm status", "Report PID, port, health"],
+            ["ccp-litellm log", "Tail /tmp/ccp-server.log"],
+            ["ccp-litellm troubleshoot", "Port scan + config dump"],
+            ["ccp", "Legacy alias (start only)"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "info",
+          "title": "Slash Command",
+          "body": "/ccp-litellm [start|stop|restart|status|log|troubleshoot] — mirrors the CLI via Claude Code skill."
+        }
+      ]
+    },
+    "menubar": {
+      "title": "CCP LiteLLM Menu Bar App",
+      "category": "OPERATIONS",
+      "blocks": [
+        {
+          "type": "overview",
+          "title": "Native macOS Menu Bar Control",
+          "description": "Swift/AppKit menu bar utility at ~/Applications/CCP LiteLLM.app that provides live status indicator, model configuration, and login-item toggles.",
+          "methodology": "Source: CcpMenuBar.swift, CcpModels.swift. Rebuild via: bash build-menubar.sh"
+        },
+        {
+          "type": "list",
+          "style": "unordered",
+          "items": [
+            "Live status dot: green (healthy) | red (down) | amber (starting)",
+            "Model Manager: browse Azure catalog, deploy via az CLI",
+            "Login-item toggles for both LaunchAgents",
+            "Quick-switch BIG/SMALL/FRONTIER without editing .env"
+          ]
+        }
+      ]
+    },
+    "switcher": {
+      "title": "ccp-switcher TUI",
+      "category": "OPERATIONS",
+      "blocks": [
+        {
+          "type": "overview",
+          "title": "Interactive Terminal Model Switcher",
+          "description": "Bash TUI at ./ccp-switcher for rapid model tier reconfiguration without opening .env.",
+          "methodology": "Modifies BIG_MODEL, SMALL_MODEL, FRONTIER_MODEL in .env and triggers restart."
+        },
+        {
+          "type": "callout",
+          "variant": "info",
+          "title": "Usage",
+          "body": "./ccp-switcher — arrow keys to navigate tiers, enter to select model from candidates list."
+        }
+      ]
+    },
+    "launchagents": {
+      "title": "LaunchAgents (macOS Autostart)",
+      "category": "OPERATIONS",
+      "blocks": [
+        {
+          "type": "table",
+          "title": "Registered Agents",
+          "columns": ["Label", "Plist Path", "Purpose"],
+          "rows": [
+            ["com.ccp.litellm.proxy", "~/Library/LaunchAgents/com.ccp.litellm.proxy.plist", "Start FastAPI proxy at login"],
+            ["com.ccp.litellm.menubar", "~/Library/LaunchAgents/com.ccp.litellm.menubar.plist", "Start menu bar app at login"]
+          ]
+        },
+        {
+          "type": "code",
+          "language": "bash",
+          "title": "Manual Bootstrap",
+          "body": "launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccp.litellm.proxy.plist\nlaunchctl bootout gui/$(id -u)/com.ccp.litellm.proxy"
+        },
+        {
+          "type": "callout",
+          "variant": "warning",
+          "title": "Expected Port :8082 Triple-PID",
+          "body": "When menu bar app is running, troubleshoot shows 3 PIDs on :8082 — uvicorn main, uvicorn watcher, menu bar health-check socket. This is NORMAL."
+        }
+      ]
+    },
+    "litellm-policy": {
+      "title": "LiteLLM Supply Chain Policy",
+      "category": "SECURITY",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "critical",
+          "title": "ACTIVE SUPPLY CHAIN THREAT",
+          "body": "LiteLLM versions 1.82.7 and 1.82.8 were compromised by threat actor TeamPCP (March 24, 2026) via Trivy CI/CD breach. NEVER install these versions."
+        },
+        {
+          "type": "table",
+          "title": "Version Constraint (pyproject.toml)",
+          "columns": ["Range", "Status"],
+          "rows": [
+            [">=1.77.7,<1.82.0", "PINNED (active constraint)"],
+            ["1.82.7, 1.82.8", "BANNED — credential stealer + RCE dropper"],
+            ["1.40.3-1.40.12", "BANNED — CVE-2024-6825 (RCE)"],
+            ["<1.56.2", "BANNED — CVE-2024-8984 (DoS)"]
+          ]
+        },
+        {
+          "type": "list",
+          "style": "unordered",
+          "items": [
+            "Payload 1.82.7: base64-encoded code injected into litellm/proxy/proxy_server.py",
+            "Payload 1.82.8: malicious litellm_init.pth (34,628 bytes), auto-executes on interpreter startup",
+            "Capability: steals SSH keys, cloud creds, env vars, CI/CD tokens",
+            "Dropper: installs systemd persistence + Kubernetes privilege escalation tools"
+          ]
+        }
+      ]
+    },
+    "cves": {
+      "title": "CVE Mitigation",
+      "category": "SECURITY",
+      "blocks": [
+        {
+          "type": "table",
+          "title": "CVEs Mitigated by Current Pin",
+          "columns": ["CVE", "Severity", "Affected", "Status"],
+          "rows": [
+            ["CVE-2024-6825", "CRITICAL (RCE)", "1.40.3-1.40.12", "PROTECTED (>=1.77.7)"],
+            ["CVE-2024-8984", "HIGH (DoS)", "<1.56.2", "PROTECTED (>=1.77.7)"],
+            ["Supply chain (TeamPCP)", "CRITICAL", "1.82.7-1.82.8", "PROTECTED (<1.82.0)"]
+          ]
+        }
+      ]
+    },
+    "detection": {
+      "title": "Incident Detection & Response",
+      "category": "SECURITY",
+      "blocks": [
+        {
+          "type": "callout",
+          "variant": "critical",
+          "title": "If 1.82.7 or 1.82.8 ever installed — IMMEDIATE ACTIONS",
+          "body": "Assume full environment compromise. Rotate all secrets, audit CloudTrail/Azure logs, and review git history before continuing work."
+        },
+        {
+          "type": "list",
+          "style": "ordered",
+          "items": [
+            "Rotate AWS access keys and session tokens",
+            "Rotate GCP service account keys",
+            "Rotate Azure credentials (client secrets, managed identities)",
+            "Rotate SSH private keys on all machines that touched venv",
+            "Rotate CI/CD tokens (GitHub Actions, Azure DevOps, etc.)",
+            "Audit CloudTrail / Azure Activity Log for unauthorized API calls",
+            "Review git history for suspicious commits",
+            "Run pip audit across all venvs for other compromised packages",
+            "Document incident timeline in security review log"
+          ]
+        },
+        {
+          "type": "code",
+          "language": "bash",
+          "title": "Detection One-Liner",
+          "body": "pip show litellm | grep Version\nfind ~ -name 'litellm_init.pth' 2>/dev/null\npip list 2>&1 | grep -E 'litellm\\s+1\\.82\\.(7|8)'"
+        }
+      ]
+    },
+    "runbook": {
+      "title": "Operations Runbook",
+      "category": "RUNBOOK",
+      "blocks": [
+        {
+          "type": "code",
+          "language": "bash",
+          "title": "Start Server (foreground)",
+          "body": "cd /Users/jeremiah/Developer/claude-code-proxy\nuv run uvicorn server:app --host 0.0.0.0 --port 8082 --reload"
+        },
+        {
+          "type": "code",
+          "language": "bash",
+          "title": "Start / Stop via CLI",
+          "body": "ccp-litellm start\nccp-litellm status\nccp-litellm log\nccp-litellm stop"
+        },
+        {
+          "type": "code",
+          "language": "bash",
+          "title": "Health Check",
+          "body": "curl -s http://localhost:8082/\n# -> {\"message\": \"Anthropic Proxy for LiteLLM\"}"
+        },
+        {
+          "type": "code",
+          "language": "bash",
+          "title": "Connect Claude Code",
+          "body": "ANTHROPIC_BASE_URL=http://localhost:8082 claude"
+        }
+      ]
+    },
+    "troubleshoot": {
+      "title": "Troubleshooting",
+      "category": "RUNBOOK",
+      "blocks": [
+        {
+          "type": "table",
+          "title": "Common Failures",
+          "columns": ["Symptom", "Cause", "Fix"],
+          "rows": [
+            ["404 on first call", "Model not in AZURE_DEPLOYMENT_MAP", "Add mapping entry, restart"],
+            ["Loop of Azure retries", "_retried_with_azure flag missing", "Verify fallback guard in server.py"],
+            ["3 PIDs on :8082", "Menu bar app health probe", "Expected — ignore"],
+            ["Client auth failure", "PROXY_API_KEY mismatch", "Sync client x-api-key header with .env"],
+            ["Gemini 403", "Missing GEMINI_API_KEY or ADC", "Set key or USE_VERTEX_AUTH=true"],
+            ["ANTHROPIC_API_KEY missing warning", "Fallback to Azure engaged", "Intentional — confirms fallback path"]
+          ]
+        },
+        {
+          "type": "callout",
+          "variant": "info",
+          "title": "Support Paths",
+          "body": "Log: /tmp/ccp-server.log | Source: server.py | Config: .env | Tests: tests/ + tests.py"
+        }
+      ]
+    }
+  }
+}

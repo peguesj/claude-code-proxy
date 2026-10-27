@@ -1,0 +1,38 @@
+{
+  "meta": {
+    "title": "Claude Code Proxy — Operations Document",
+    "subtitle": "FastAPI + LiteLLM Anthropic-compatible proxy to Azure OpenAI, OpenAI, Google, Anthropic",
+    "project": "claude-code-proxy",
+    "version": "0.1.0",
+    "generated": "2026-04-05",
+    "audience": "Technical",
+    "mode": "technical",
+    "owner": "jeremiah",
+    "repo_path": "/Users/jeremiah/Developer/claude-code-proxy",
+    "port": 8082
+  },
+  "theme": {
+    "preset": "obsidian",
+    "accent": "#f5c518",
+    "accent_secondary": "#7c9cff",
+    "danger": "#ff5a5f",
+    "success": "#40e0a7"
+  },
+  "features": {
+    "wrapped": true,
+    "inspector": true,
+    "presenter": false,
+    "comments": false,
+    "scenarios": false,
+    "print": true,
+    "standalone": true
+  },
+  "navigation": [
+    { "group": "EXECUTIVE", "items": ["overview", "kpis"] },
+    { "group": "ARCHITECTURE", "items": ["server", "request-flow", "fallback"] },
+    { "group": "CONFIGURATION", "items": ["env-matrix", "azure-map", "model-tiers"] },
+    { "group": "OPERATIONS", "items": ["cli", "menubar", "switcher", "launchagents"] },
+    { "group": "SECURITY", "items": ["litellm-policy", "cves", "detection"] },
+    { "group": "RUNBOOK", "items": ["runbook", "troubleshoot"] }
+  ]
+}

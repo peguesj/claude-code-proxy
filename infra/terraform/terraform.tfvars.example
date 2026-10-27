@@ -1,0 +1,4 @@
+subscription_id         = "00000000-0000-0000-0000-000000000000"
+groups_file             = "../../ccp_groups.json"
+deploy_on_demand_models = false
+include_legacy          = false

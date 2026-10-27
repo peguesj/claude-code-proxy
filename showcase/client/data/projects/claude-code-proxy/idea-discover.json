@@ -1,0 +1,40 @@
+{
+  "phase": "discover",
+  "project": "claude-code-proxy",
+  "generated_at": "2026-04-05T00:00:00Z",
+  "architecture_scan": {
+    "entry_point": "server.py",
+    "lines_of_code": 1789,
+    "framework": "FastAPI + uvicorn",
+    "language": "Python 3.11"
+  },
+  "routes": {
+    "total": 3,
+    "entries": [
+      {"method": "POST", "path": "/v1/messages", "handler": "create_message"},
+      {"method": "POST", "path": "/v1/messages/count_tokens", "handler": "count_tokens"},
+      {"method": "GET", "path": "/", "handler": "root"}
+    ]
+  },
+  "feature_inventory": [
+    "Anthropic /v1/messages compatibility",
+    "Streaming SSE response translation",
+    "Tool-use translation (Anthropic <-> OpenAI function-calling)",
+    "Multi-modal content blocks",
+    "Azure fallback when ANTHROPIC_API_KEY missing",
+    "One-shot Azure retry on Anthropic 404",
+    "Gemini schema sanitization",
+    "PROXY_API_KEY client auth",
+    "Colorized logging",
+    "Swift menu bar management app",
+    "Bash TUI model switcher",
+    "LaunchAgent autostart"
+  ],
+  "integration_points": [
+    {"type": "inbound", "client": "Claude Code CLI", "env": "ANTHROPIC_BASE_URL"},
+    {"type": "outbound", "provider": "Azure OpenAI"},
+    {"type": "outbound", "provider": "OpenAI"},
+    {"type": "outbound", "provider": "Google Gemini/Vertex"},
+    {"type": "outbound", "provider": "Anthropic"}
+  ]
+}

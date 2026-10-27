@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.exceptions import RequestValidationError
 import uvicorn
 import logging
 import json
@@ -7,16 +8,31 @@ from typing import List, Dict, Any, Optional, Union, Literal
 import httpx
 import os
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 import litellm
 import uuid
 import time
 from dotenv import load_dotenv
 import re
+import hashlib
 from datetime import datetime
 import sys
+from profiles import (
+    deployment_map,
+    load_profiles,
+    prepare_profile,
+    profile_value,
+    provider_setting,
+    public_profiles,
+    route_value,
+)
+from azure_discovery import AzureDiscoveryError, discovery as azure_discovery
+import ccp_lifecycle
 
 # Load environment variables from .env file
 load_dotenv()
+PROFILE_CONFIG = load_profiles()
+PREPARED_PROFILE = prepare_profile(PROFILE_CONFIG, os.environ)
 
 # Configure logging
 logging.basicConfig(
@@ -77,10 +93,89 @@ for handler in logger.handlers:
 
 app = FastAPI()
 
+
+@app.exception_handler(RequestValidationError)
+async def log_request_validation_error(request: Request, exc: RequestValidationError):
+    """Log schema failures without copying prompt or tool contents into logs."""
+    diagnostics = [
+        {
+            "loc": list(error.get("loc", ())),
+            "type": error.get("type"),
+            "msg": error.get("msg"),
+        }
+        for error in exc.errors()
+    ]
+    unknown_block_shapes = []
+    known_block_types = {"text", "image", "tool_use", "tool_result", "thinking", "tool_addition"}
+    try:
+        body = await request.json()
+        for message_index, message in enumerate(body.get("messages", [])):
+            content = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(content, list):
+                continue
+            for block_index, block in enumerate(content):
+                if isinstance(block, dict):
+                    block_type = block.get("type")
+                    if block_type not in known_block_types:
+                        unknown_block_shapes.append({
+                            "message": message_index,
+                            "block": block_index,
+                            "type": block_type,
+                            "keys": sorted(block.keys()),
+                        })
+    except Exception:
+        unknown_block_shapes = [{"error": "request shape unavailable"}]
+    logger.error(
+        "Request validation failed for %s: errors=%s block_shapes=%s",
+        request.url.path,
+        json.dumps(diagnostics),
+        json.dumps(unknown_block_shapes),
+    )
+    if unknown_block_shapes and "error" not in unknown_block_shapes[0]:
+        types = sorted({str(shape.get("type")) for shape in unknown_block_shapes})
+        message = f"Unsupported request content block type(s): {', '.join(types)}"
+    else:
+        first = diagnostics[0] if diagnostics else {"loc": ["body"], "msg": "Invalid request"}
+        message = f"Invalid request payload at {'.'.join(map(str, first['loc']))}: {first['msg']}"
+    return JSONResponse(
+        status_code=400,
+        content={"type": "error", "error": {"type": "invalid_request_error", "message": message}},
+    )
+
+# Allow local browser apps (SYL showcase, etc.) to call the dev proxy
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8787", "http://127.0.0.1:8787", "http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Get API keys from environment
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# Proxy authentication: if set, clients must present this key to use the proxy
+PROXY_API_KEY = os.environ.get("PROXY_API_KEY")
+
+# Azure OpenAI configuration
+AZURE_API_KEY = provider_setting(PREPARED_PROFILE, "azure", "api_key", "AZURE_API_KEY")
+AZURE_API_BASE = provider_setting(PREPARED_PROFILE, "azure", "api_base", "AZURE_API_BASE")
+AZURE_API_VERSION = provider_setting(PREPARED_PROFILE, "azure", "api_version", "AZURE_API_VERSION", "2025-04-01-preview")
+AZURE_SUBSCRIPTION_ID = provider_setting(PREPARED_PROFILE, "azure", "subscription_id", "AZURE_SUBSCRIPTION_ID")
+AZURE_RESOURCE_GROUP = provider_setting(PREPARED_PROFILE, "azure", "resource_group", "AZURE_RESOURCE_GROUP")
+AZURE_ACCOUNT_NAME = provider_setting(PREPARED_PROFILE, "azure", "account_name", "AZURE_ACCOUNT_NAME")
+AZURE_LOCATION = provider_setting(PREPARED_PROFILE, "azure", "location", "AZURE_LOCATION", "eastus2")
+
+# Azure AI Foundry configuration
+AZURE_AI_API_KEY = provider_setting(PREPARED_PROFILE, "azure_ai", "api_key", "AZURE_AI_API_KEY", AZURE_API_KEY)
+AZURE_AI_API_BASE = provider_setting(PREPARED_PROFILE, "azure_ai", "api_base", "AZURE_AI_API_BASE", AZURE_API_BASE)
+AZURE_AI_API_VERSION = provider_setting(PREPARED_PROFILE, "azure_ai", "api_version", "AZURE_AI_API_VERSION", AZURE_API_VERSION)
+AZURE_AI_SUBSCRIPTION_ID = provider_setting(PREPARED_PROFILE, "azure_ai", "subscription_id", "AZURE_AI_SUBSCRIPTION_ID", AZURE_SUBSCRIPTION_ID)
+AZURE_AI_RESOURCE_GROUP = provider_setting(PREPARED_PROFILE, "azure_ai", "resource_group", "AZURE_AI_RESOURCE_GROUP", AZURE_RESOURCE_GROUP)
+AZURE_AI_ACCOUNT_NAME = provider_setting(PREPARED_PROFILE, "azure_ai", "account_name", "AZURE_AI_ACCOUNT_NAME", AZURE_ACCOUNT_NAME)
+AZURE_AI_LOCATION = provider_setting(PREPARED_PROFILE, "azure_ai", "location", "AZURE_AI_LOCATION", AZURE_LOCATION)
 
 # Get Vertex AI project and location from environment (if set)
 VERTEX_PROJECT = os.environ.get("VERTEX_PROJECT", "unset")
@@ -93,27 +188,83 @@ USE_VERTEX_AUTH = os.environ.get("USE_VERTEX_AUTH", "False").lower() == "true"
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL")
 
 # Get preferred provider (default to openai)
-PREFERRED_PROVIDER = os.environ.get("PREFERRED_PROVIDER", "openai").lower()
+PREFERRED_PROVIDER = (profile_value(PREPARED_PROFILE, "preferred_provider", "PREFERRED_PROVIDER", "openai") or "openai").lower()
 
 # Get model mapping configuration from environment
 # Default to latest OpenAI models if not set
-BIG_MODEL = os.environ.get("BIG_MODEL", "gpt-4.1")
-SMALL_MODEL = os.environ.get("SMALL_MODEL", "gpt-4.1-mini")
+BIG_MODEL = route_value(PREPARED_PROFILE, "big", "BIG_MODEL", "gpt-4.1")
+SMALL_MODEL = route_value(PREPARED_PROFILE, "small", "SMALL_MODEL", "gpt-4.1-mini")
+FRONTIER_MODEL = route_value(PREPARED_PROFILE, "frontier", "FRONTIER_MODEL", "gpt-6-astra")
 
-# List of OpenAI models
+# Opus 1M compatibility aliases follow the Codex/Azure reasoning tiers.
+OPUS_1M_EFFORT_MODELS = {
+    "low": "gpt-5.6-luna",
+    "medium": "gpt-5.6-terra",
+    "med": "gpt-5.6-terra",
+    "high": "gpt-5.6-sol",
+}
+
+# Azure OpenAI's tools array limit is 128. Claude Code can expose more tools
+# than that when many MCP servers are enabled, so keep the request valid for
+# Azure-compatible backends while preserving deterministic ordering.
+MAX_PROVIDER_TOOLS = 128
+MAX_PROVIDER_TOOL_CALL_ID = 64
+
+def normalize_provider_tool_call_id(tool_id: Any) -> str:
+    """Keep Anthropic tool IDs stable while satisfying Azure's 64-char limit."""
+    value = str(tool_id or "tool_call")
+    if len(value) <= MAX_PROVIDER_TOOL_CALL_ID:
+        return value
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    return f"{value[:MAX_PROVIDER_TOOL_CALL_ID - 17]}_{digest}"
+
+def is_provider_retryable_error(error_text: str) -> bool:
+    lowered = error_text.lower()
+    return any(marker in lowered for marker in (
+        "anthropicexception", "resource not found", "ratelimit", "rate limit",
+        "too many requests", "429", "overloaded",
+    ))
+
+def alternate_azure_model(current_model: str, role: str) -> str:
+    """Choose a live alternate deployment when the selected Azure tier is throttled."""
+    clean = provider_model_identity(current_model)
+    alternates = {
+        "gpt-6-astra": "gpt-5.6-sol",
+        "gpt-5.6-terra": "gpt-5.6-luna",
+        "gpt-5.6-luna": "gpt-5.5",
+        "gpt-5.6-sol": "gpt-5.6-luna",
+    }
+    alternate = alternates.get(clean, MODEL_ROLE_CONFIG[role]["configured_model"])
+    return format_provider_model("azure", resolve_azure_deployment(alternate))
+
+# Models currently deployed in the configured Azure OpenAI resource.
 OPENAI_MODELS = [
-    "o3-mini",
-    "o1",
-    "o1-mini",
-    "o1-pro",
-    "gpt-4.5-preview",
     "gpt-4o",
-    "gpt-4o-audio-preview",
-    "chatgpt-4o-latest",
     "gpt-4o-mini",
-    "gpt-4o-mini-audio-preview",
-    "gpt-4.1",  # Added default big model
-    "gpt-4.1-mini" # Added default small model
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-5.1",
+    "gpt-5.1-codex-max",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.3-codex",
+    "gpt-5.5",
+    "gpt-6-astra",
+    "gpt-5.6-luna",
+    "gpt-5.6-terra",
+    "gpt-5.6-sol",
+    "o1",
+    "o3-mini",
+    "o3",
+    "o4-mini",
+    "codex-mini",
+    "gpt-audio",
+    "gpt-audio-mini",
+    "model-router",
 ]
 
 # List of Gemini models
@@ -121,6 +272,309 @@ GEMINI_MODELS = [
     "gemini-2.5-flash",
     "gemini-2.5-pro"
 ]
+
+# Azure OpenAI deployment map: model name -> deployment name
+# Users can override via AZURE_DEPLOYMENT_MAP env var (JSON string)
+_default_azure_map = {
+    "gpt-4o": "gpt-4o",
+    "gpt-4o-mini": "gpt-4o-mini",
+    "gpt-4.1": "gpt-4-1",
+    "gpt-4.1-mini": "gpt-4-1-mini",
+    "gpt-4.1-nano": "gpt-4-1-nano",
+    "gpt-5": "gpt-5",
+    "gpt-5-mini": "gpt-5-mini",
+    "gpt-5-nano": "gpt-5-nano",
+    "gpt-5.1": "gpt-5-1",
+    "gpt-5.1-codex-max": "gpt-5.1-codex-max",
+    "gpt-5.2": "gpt-5-2",
+    "gpt-5.2-codex": "gpt-5-2-codex",
+    "gpt-5.3-codex": "gpt-5.3-codex",
+    "gpt-5.5": "gpt-5.5",
+    "gpt-6-astra": "gpt-6-astra",
+    "gpt-5.6-luna": "gpt-5.6-luna",
+    "gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-5.6-sol": "gpt-5.6-sol",
+    "o1": "o1",
+    "o3-mini": "o3-mini",
+    "o3": "o3",
+    "o4-mini": "o4-mini",
+    "codex-mini": "codex-mini",
+    "gpt-audio": "gpt-audio",
+    "gpt-audio-mini": "gpt-audio-mini",
+    "model-router": "model-router",
+}
+AZURE_DEPLOYMENT_MAP = deployment_map(
+    PREPARED_PROFILE,
+    PREFERRED_PROVIDER if PREFERRED_PROVIDER in ("azure", "azure_ai") else "azure",
+    _default_azure_map,
+)
+AZURE_MODELS = list(AZURE_DEPLOYMENT_MAP.keys())
+
+MODEL_ROLE_CONFIG = {
+    "small": {
+        "claude_family": "haiku",
+        "env": "SMALL_MODEL",
+        "configured_model": SMALL_MODEL,
+        "purpose": "fast edits, summaries, lightweight tool use",
+    },
+    "big": {
+        "claude_family": "sonnet",
+        "env": "BIG_MODEL",
+        "configured_model": BIG_MODEL,
+        "purpose": "general coding, planning, and multi-step work",
+    },
+    "frontier": {
+        "claude_family": "opus",
+        "env": "FRONTIER_MODEL",
+        "configured_model": FRONTIER_MODEL,
+        "purpose": "highest-capability reasoning and difficult code work",
+    },
+}
+
+PROVIDER_CAPABILITIES = {
+    "anthropic": {
+        "label": "Anthropic Claude passthrough",
+        "configured": bool(ANTHROPIC_API_KEY),
+        "env": ["ANTHROPIC_API_KEY"],
+        "model_prefix": "anthropic/",
+        "notes": "Use when you want exact Claude model behavior.",
+    },
+    "azure": {
+        "label": "Azure OpenAI",
+        "configured": bool(AZURE_API_KEY and AZURE_API_BASE),
+        "env": ["AZURE_API_KEY", "AZURE_API_BASE", "AZURE_API_VERSION", "AZURE_DEPLOYMENT_MAP"],
+        "instance": PREPARED_PROFILE.get("provider_instances", {}).get("azure", {}),
+        "model_prefix": "azure/",
+        "notes": "Best for deployed Azure OpenAI models with stable deployment names.",
+    },
+    "azure_ai": {
+        "label": "Azure AI Foundry",
+        "configured": bool(AZURE_AI_API_KEY and AZURE_AI_API_BASE),
+        "env": ["AZURE_AI_API_KEY", "AZURE_AI_API_BASE", "AZURE_AI_API_VERSION"],
+        "instance": PREPARED_PROFILE.get("provider_instances", {}).get("azure_ai", {}),
+        "model_prefix": "azure_ai/",
+        "notes": "Use for Foundry model endpoints and broader Azure AI catalog parity.",
+    },
+    "openai": {
+        "label": "OpenAI",
+        "configured": bool(OPENAI_API_KEY),
+        "env": ["OPENAI_API_KEY", "OPENAI_BASE_URL"],
+        "model_prefix": "openai/",
+        "notes": "Direct OpenAI API access.",
+    },
+    "google": {
+        "label": "Google Gemini",
+        "configured": bool(GEMINI_API_KEY or (USE_VERTEX_AUTH and VERTEX_PROJECT != "unset")),
+        "env": ["GEMINI_API_KEY", "USE_VERTEX_AUTH", "VERTEX_PROJECT", "VERTEX_LOCATION"],
+        "model_prefix": "gemini/",
+        "notes": "Gemini API key or Vertex AI ADC.",
+    },
+}
+
+def infer_claude_role(model_name: str) -> Optional[str]:
+    """Return the CCP role implied by a Claude-family model name."""
+    clean = strip_provider_prefix(model_name).lower()
+    if "haiku" in clean:
+        return "small"
+    if "sonnet" in clean:
+        return "big"
+    # Claude Code 2.1.296 added Fable/Mythos above Opus. CCP has three
+    # backend tiers, so route those highest-capability families through the
+    # frontier model instead of accidentally treating them as Anthropic
+    # passthrough models.
+    if any(family in clean for family in ("opus", "fable", "mythos")):
+        return "frontier"
+    return None
+
+
+def normalize_reasoning_effort(effort: Any) -> Optional[str]:
+    """Accept known efforts without letting malformed client values crash routing."""
+    if not isinstance(effort, str):
+        return None
+    normalized = effort.strip().lower()
+    if normalized == "med":
+        normalized = "medium"
+    if normalized in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"):
+        return normalized
+    return None
+
+
+def opus_1m_effort(model_name: str, effort: Any = None) -> Optional[str]:
+    """Explicit effort wins over an alias suffix; bare Opus 1M defaults to medium."""
+    clean = strip_provider_prefix(model_name).lower()
+    if "opus" not in clean or "1m" not in clean:
+        return None
+    normalized = normalize_reasoning_effort(effort)
+    if normalized:
+        return normalized
+    suffix = re.search(r"(?<![a-z0-9])(low|medium|med|high)(?![a-z0-9])", clean)
+    return normalize_reasoning_effort(suffix.group(1)) if suffix else "medium"
+
+
+def opus_1m_effort_model(model_name: str, effort: Any = None) -> Optional[str]:
+    """Resolve an Opus 1M alias and effort to the 5.6 reasoning tier."""
+    normalized = opus_1m_effort(model_name, effort)
+    if normalized is None:
+        return None
+    if normalized in ("none", "minimal"):
+        normalized = "low"
+    elif normalized in ("xhigh", "max", "ultra"):
+        normalized = "high"
+    return OPUS_1M_EFFORT_MODELS[normalized]
+
+
+def map_role_to_provider_model(role: str, provider: Optional[str] = None) -> str:
+    """Map CCP small/big/frontier roles to the configured backend model."""
+    target_provider = (provider or PREFERRED_PROVIDER).lower()
+    configured = MODEL_ROLE_CONFIG[role]["configured_model"]
+    if target_provider in ("azure", "azure_ai"):
+        return format_provider_model(target_provider, resolve_azure_deployment(configured))
+    if target_provider == "google" and configured in GEMINI_MODELS:
+        return format_provider_model("gemini", configured)
+    if target_provider == "anthropic":
+        family = MODEL_ROLE_CONFIG[role]["claude_family"]
+        return f"anthropic/claude-{family}"
+    return format_provider_model("openai", configured)
+
+def current_model_routes() -> Dict[str, Any]:
+    """Return the active Claude-family to backend model routing table."""
+    routes = {}
+    for role, config in MODEL_ROLE_CONFIG.items():
+        routes[role] = {
+            **config,
+            "provider": PREFERRED_PROVIDER,
+            "routed_model": map_role_to_provider_model(role),
+        }
+    return routes
+
+
+def route_openai_compatible_model(model_name: str, reasoning_effort: Any = None) -> str:
+    """Resolve an OpenAI-compatible client model through CCP's configured routes."""
+    if model_name.startswith(("anthropic/", "openai/", "gemini/", "azure/", "azure_ai/")):
+        return model_name
+
+    clean_name = strip_provider_prefix(model_name)
+    if PREFERRED_PROVIDER == "anthropic":
+        return format_provider_model("anthropic", clean_name)
+
+    opus_1m_model = opus_1m_effort_model(clean_name, reasoning_effort)
+    if opus_1m_model and PREFERRED_PROVIDER in ("openai", "azure", "azure_ai"):
+        target = resolve_azure_deployment(opus_1m_model) if PREFERRED_PROVIDER in ("azure", "azure_ai") else opus_1m_model
+        return format_provider_model(PREFERRED_PROVIDER, target)
+
+    role = infer_claude_role(clean_name)
+    if role:
+        return map_role_to_provider_model(role)
+    if clean_name in GEMINI_MODELS:
+        return format_provider_model("gemini", clean_name)
+    if clean_name in (AZURE_MODELS + OPENAI_MODELS) and PREFERRED_PROVIDER in ("azure", "azure_ai"):
+        return format_provider_model(PREFERRED_PROVIDER, resolve_azure_deployment(clean_name))
+    if clean_name in OPENAI_MODELS:
+        return format_provider_model("openai", clean_name)
+    return model_name
+
+
+def configure_provider_credentials(payload: Dict[str, Any], client_api_key: Optional[str] = None) -> None:
+    """Attach server-managed upstream credentials without exposing them to clients."""
+    model = payload.get("model", "")
+    if model.startswith("azure_ai/"):
+        payload.update(
+            api_key=AZURE_AI_API_KEY,
+            api_base=AZURE_AI_API_BASE,
+            api_version=AZURE_AI_API_VERSION,
+            custom_llm_provider="azure_ai",
+        )
+    elif model.startswith("azure/"):
+        payload.update(api_key=AZURE_API_KEY, api_base=AZURE_API_BASE, api_version=AZURE_API_VERSION)
+    elif model.startswith("openai/"):
+        payload["api_key"] = OPENAI_API_KEY
+        if OPENAI_BASE_URL:
+            payload["api_base"] = OPENAI_BASE_URL
+    elif model.startswith("gemini/"):
+        if USE_VERTEX_AUTH:
+            payload.update(
+                vertex_project=VERTEX_PROJECT,
+                vertex_location=VERTEX_LOCATION,
+                custom_llm_provider="vertex_ai",
+            )
+        else:
+            payload["api_key"] = GEMINI_API_KEY
+    elif model.startswith("anthropic/"):
+        effective_key = ANTHROPIC_API_KEY or client_api_key
+        if effective_key:
+            payload["api_key"] = effective_key
+
+
+def apply_group_route(payload: Dict[str, Any], requested_model: str) -> Optional[JSONResponse]:
+    """Send models from non-legacy CCP groups to their own Azure account; legacy routing is untouched."""
+    route = ccp_lifecycle.manager.route(requested_model, AZURE_API_VERSION)
+    if not route:
+        return None
+    group_id = route.pop("ccp_group")
+    if not route.get("api_key"):
+        return JSONResponse(status_code=503, content={"error": {
+            "type": "group_credentials_missing",
+            "message": f"No API credential for CCP group {group_id}; add AZURE_GROUP_<ID>_API_KEY or check az login.",
+            "group": group_id,
+        }})
+    for key in ("api_key", "api_base", "api_version", "custom_llm_provider"):
+        payload.pop(key, None)
+    payload.update(route)
+    logger.debug(f"CCP group route: {requested_model} -> {route['model']} via group {group_id}")
+    return None
+
+
+def openai_response_dict(response: Any) -> Dict[str, Any]:
+    """Convert LiteLLM response objects into JSON-safe OpenAI response dictionaries."""
+    if isinstance(response, dict):
+        return response
+    if hasattr(response, "model_dump"):
+        try:
+            return response.model_dump(mode="json")
+        except TypeError:
+            return response.model_dump()
+    if hasattr(response, "dict"):
+        return response.dict()
+    raise TypeError(f"Unsupported LiteLLM response type: {type(response).__name__}")
+
+def strip_provider_prefix(model_name: str) -> str:
+    """Strip supported provider prefixes from a model name."""
+    for prefix in ("anthropic/", "openai/", "gemini/", "azure/", "azure_ai/"):
+        if model_name.startswith(prefix):
+            return model_name[len(prefix):]
+    return model_name
+
+
+def format_provider_model(provider: str, model_name: str) -> str:
+    """Format the model name with the correct provider prefix."""
+    clean_name = strip_provider_prefix(model_name)
+    if provider == "anthropic":
+        return f"anthropic/{clean_name}"
+    if provider == "openai":
+        return f"openai/{clean_name}"
+    if provider == "gemini":
+        return f"gemini/{clean_name}"
+    if provider == "azure":
+        return f"azure/{clean_name}"
+    if provider == "azure_ai":
+        return f"azure_ai/{clean_name}"
+    return model_name
+
+
+def resolve_azure_deployment(model_name: str) -> str:
+    """Resolve an Azure deployment name for a custom model."""
+    normalized = strip_provider_prefix(model_name)
+    return AZURE_DEPLOYMENT_MAP.get(normalized, normalized)
+
+
+def provider_model_identity(model_name: str) -> str:
+    """Recover the canonical model even when Azure uses a custom deployment name."""
+    clean = strip_provider_prefix(model_name).removeprefix("responses/")
+    if model_name.startswith(("azure/", "azure_ai/")):
+        for canonical, deployment in AZURE_DEPLOYMENT_MAP.items():
+            if clean == deployment:
+                return canonical
+    return clean
 
 # Helper function to clean schema for Gemini
 def clean_gemini_schema(schema: Any) -> Any:
@@ -145,6 +599,19 @@ def clean_gemini_schema(schema: Any) -> Any:
         return [clean_gemini_schema(item) for item in schema]
     return schema
 
+
+def normalize_strict_response_schema(schema: Any) -> Any:
+    """Make JSON schemas valid for OpenAI/Azure strict structured outputs."""
+    if isinstance(schema, dict):
+        normalized = {key: normalize_strict_response_schema(value) for key, value in schema.items()}
+        if isinstance(normalized.get("properties"), dict):
+            normalized["required"] = list(normalized["properties"].keys())
+            normalized.setdefault("additionalProperties", False)
+        return normalized
+    if isinstance(schema, list):
+        return [normalize_strict_response_schema(item) for item in schema]
+    return schema
+
 # Models for Anthropic API requests
 class ContentBlockText(BaseModel):
     type: Literal["text"]
@@ -165,13 +632,22 @@ class ContentBlockToolResult(BaseModel):
     tool_use_id: str
     content: Union[str, List[Dict[str, Any]], Dict[str, Any], List[Any], Any]
 
+class ContentBlockThinking(BaseModel):
+    type: Literal["thinking"]
+    thinking: str
+
+class ContentBlockToolAddition(BaseModel):
+    """Claude Code resume metadata for a tool added after the session began."""
+    type: Literal["tool_addition"]
+    tool: Dict[str, Any]
+
 class SystemContent(BaseModel):
     type: Literal["text"]
     text: str
 
 class Message(BaseModel):
-    role: Literal["user", "assistant"] 
-    content: Union[str, List[Union[ContentBlockText, ContentBlockImage, ContentBlockToolUse, ContentBlockToolResult]]]
+    role: Literal["user", "assistant", "system"]
+    content: Union[str, List[Union[ContentBlockText, ContentBlockImage, ContentBlockToolUse, ContentBlockToolResult, ContentBlockThinking, ContentBlockToolAddition]]]
 
 class Tool(BaseModel):
     name: str
@@ -182,6 +658,7 @@ class ThinkingConfig(BaseModel):
     enabled: bool = True
 
 class MessagesRequest(BaseModel):
+    output_config: Optional[Dict[str, Any]] = None
     model: str
     max_tokens: int
     messages: List[Message]
@@ -202,57 +679,53 @@ class MessagesRequest(BaseModel):
         original_model = v
         new_model = v # Default to original value
 
-        logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}', Preferred='{PREFERRED_PROVIDER}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}'")
+        logger.debug(f"📋 MODEL VALIDATION: Original='{original_model}', Preferred='{PREFERRED_PROVIDER}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}', FRONTIER='{FRONTIER_MODEL}'")
 
         # Remove provider prefixes for easier matching
-        clean_v = v
-        if clean_v.startswith('anthropic/'):
-            clean_v = clean_v[10:]
-        elif clean_v.startswith('openai/'):
-            clean_v = clean_v[7:]
-        elif clean_v.startswith('gemini/'):
-            clean_v = clean_v[7:]
+        clean_v = strip_provider_prefix(v)
 
         # --- Mapping Logic --- START ---
         mapped = False
         if PREFERRED_PROVIDER == "anthropic":
-            # Don't remap to big/small models, just add the prefix
+            # Don't remap to big/small models, just add the prefix.
             new_model = f"anthropic/{clean_v}"
             mapped = True
 
-        # Map Haiku to SMALL_MODEL based on provider preference
-        elif 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{SMALL_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{SMALL_MODEL}"
-                mapped = True
-
-        # Map Sonnet to BIG_MODEL based on provider preference
-        elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{BIG_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{BIG_MODEL}"
-                mapped = True
+        role = infer_claude_role(clean_v)
+        output_config = info.data.get("output_config") or {}
+        requested_effort = output_config.get("effort") if isinstance(output_config, dict) else None
+        opus_1m_model = opus_1m_effort_model(clean_v, requested_effort)
+        if not mapped and opus_1m_model and PREFERRED_PROVIDER in ("openai", "azure", "azure_ai"):
+            new_model = format_provider_model(
+                PREFERRED_PROVIDER,
+                resolve_azure_deployment(opus_1m_model)
+                if PREFERRED_PROVIDER in ("azure", "azure_ai")
+                else opus_1m_model,
+            )
+            mapped = True
+        elif not mapped and role:
+            new_model = map_role_to_provider_model(role)
+            mapped = True
 
         # Add prefixes to non-mapped models if they match known lists
         elif not mapped:
             if clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
                 new_model = f"gemini/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+                mapped = True
+            elif clean_v in (AZURE_MODELS + OPENAI_MODELS) and PREFERRED_PROVIDER in ("azure", "azure_ai"):
+                deployment = AZURE_DEPLOYMENT_MAP.get(clean_v, clean_v)
+                new_model = format_provider_model(PREFERRED_PROVIDER, deployment)
+                mapped = True
             elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
                 new_model = f"openai/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+                mapped = True
         # --- Mapping Logic --- END ---
 
         if mapped:
             logger.debug(f"📌 MODEL MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
              # If no mapping occurred and no prefix exists, log warning or decide default
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/')):
+             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'azure/', 'azure_ai/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for model: '{original_model}'. Using as is.")
              new_model = v # Ensure we return the original if no rule applied
 
@@ -264,6 +737,7 @@ class MessagesRequest(BaseModel):
         return new_model
 
 class TokenCountRequest(BaseModel):
+    output_config: Optional[Dict[str, Any]] = None
     model: str
     messages: List[Message]
     system: Optional[Union[str, List[SystemContent]]] = None
@@ -280,51 +754,48 @@ class TokenCountRequest(BaseModel):
         original_model = v
         new_model = v # Default to original value
 
-        logger.debug(f"📋 TOKEN COUNT VALIDATION: Original='{original_model}', Preferred='{PREFERRED_PROVIDER}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}'")
+        logger.debug(f"📋 TOKEN COUNT VALIDATION: Original='{original_model}', Preferred='{PREFERRED_PROVIDER}', BIG='{BIG_MODEL}', SMALL='{SMALL_MODEL}', FRONTIER='{FRONTIER_MODEL}'")
 
         # Remove provider prefixes for easier matching
-        clean_v = v
-        if clean_v.startswith('anthropic/'):
-            clean_v = clean_v[10:]
-        elif clean_v.startswith('openai/'):
-            clean_v = clean_v[7:]
-        elif clean_v.startswith('gemini/'):
-            clean_v = clean_v[7:]
+        clean_v = strip_provider_prefix(v)
 
         # --- Mapping Logic --- START ---
         mapped = False
-        # Map Haiku to SMALL_MODEL based on provider preference
-        if 'haiku' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and SMALL_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{SMALL_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{SMALL_MODEL}"
-                mapped = True
-
-        # Map Sonnet to BIG_MODEL based on provider preference
-        elif 'sonnet' in clean_v.lower():
-            if PREFERRED_PROVIDER == "google" and BIG_MODEL in GEMINI_MODELS:
-                new_model = f"gemini/{BIG_MODEL}"
-                mapped = True
-            else:
-                new_model = f"openai/{BIG_MODEL}"
-                mapped = True
+        role = infer_claude_role(clean_v)
+        output_config = info.data.get("output_config") or {}
+        opus_1m_model = opus_1m_effort_model(clean_v, output_config.get("effort"))
+        if PREFERRED_PROVIDER == "anthropic":
+            new_model = format_provider_model("anthropic", clean_v)
+            mapped = True
+        elif opus_1m_model and PREFERRED_PROVIDER in ("openai", "azure", "azure_ai"):
+            new_model = format_provider_model(
+                PREFERRED_PROVIDER,
+                resolve_azure_deployment(opus_1m_model)
+                if PREFERRED_PROVIDER in ("azure", "azure_ai") else opus_1m_model,
+            )
+            mapped = True
+        elif role:
+            new_model = map_role_to_provider_model(role)
+            mapped = True
 
         # Add prefixes to non-mapped models if they match known lists
         elif not mapped:
             if clean_v in GEMINI_MODELS and not v.startswith('gemini/'):
                 new_model = f"gemini/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+                mapped = True
+            elif clean_v in (AZURE_MODELS + OPENAI_MODELS) and PREFERRED_PROVIDER in ("azure", "azure_ai"):
+                deployment = AZURE_DEPLOYMENT_MAP.get(clean_v, clean_v)
+                new_model = format_provider_model(PREFERRED_PROVIDER, deployment)
+                mapped = True
             elif clean_v in OPENAI_MODELS and not v.startswith('openai/'):
                 new_model = f"openai/{clean_v}"
-                mapped = True # Technically mapped to add prefix
+                mapped = True
         # --- Mapping Logic --- END ---
 
         if mapped:
             logger.debug(f"📌 TOKEN COUNT MAPPING: '{original_model}' ➡️ '{new_model}'")
         else:
-             if not v.startswith(('openai/', 'gemini/', 'anthropic/')):
+             if not v.startswith(('openai/', 'gemini/', 'anthropic/', 'azure/', 'azure_ai/')):
                  logger.warning(f"⚠️ No prefix or mapping rule for token count model: '{original_model}'. Using as is.")
              new_model = v # Ensure we return the original if no rule applied
 
@@ -337,6 +808,15 @@ class TokenCountRequest(BaseModel):
 
 class TokenCountResponse(BaseModel):
     input_tokens: int
+
+
+class ProviderRequestContext:
+    """Minimal request metadata shared with provider-specific payload preparation."""
+
+    def __init__(self, model: str, original_model: str, reasoning_effort: Any = None):
+        self.model = model
+        self.original_model = original_model
+        self.output_config = {"effort": reasoning_effort} if reasoning_effort is not None else {}
 
 class Usage(BaseModel):
     input_tokens: int
@@ -354,21 +834,119 @@ class MessagesResponse(BaseModel):
     stop_sequence: Optional[str] = None
     usage: Usage
 
+
+def apply_context_window_route(request: Union[MessagesRequest, TokenCountRequest], beta_header: str) -> None:
+    """Claude Code may express opus[1m] using the context-1m beta header."""
+    original = request.original_model or request.model
+    if (
+        PREFERRED_PROVIDER not in ("openai", "azure", "azure_ai")
+        or infer_claude_role(original) != "frontier"
+        or not any(beta.strip().startswith("context-1m-") for beta in beta_header.lower().split(","))
+    ):
+        return
+    effort = (request.output_config or {}).get("effort")
+    backend = opus_1m_effort_model(original + "[1m]", effort)
+    request.model = format_provider_model(
+        PREFERRED_PROVIDER,
+        resolve_azure_deployment(backend) if PREFERRED_PROVIDER in ("azure", "azure_ai") else backend,
+    )
+    if not normalize_reasoning_effort(effort):
+        request.output_config = {**(request.output_config or {}), "effort": "medium"}
+
+
+def prepare_provider_request(payload: Dict[str, Any], request: MessagesRequest, *, resolve_transport: bool = True) -> None:
+    """Translate Anthropic-only options for the actual destination, including retries."""
+    output_config = request.output_config or {}
+    payload.pop("output_config", None)
+    payload.pop("reasoning_effort", None)
+    if not payload.get("tools"):
+        payload.pop("tool_choice", None)
+    if payload["model"].startswith("anthropic/"):
+        if output_config:
+            payload["output_config"] = output_config
+        return
+
+    payload.pop("thinking", None)
+    if not payload["model"].startswith(("openai/", "azure/", "azure_ai/")):
+        return
+
+    canonical = provider_model_identity(payload["model"])
+    effort = normalize_reasoning_effort(output_config.get("effort"))
+    effort = effort or opus_1m_effort(request.original_model or request.model)
+    if effort and re.match(r"^(gpt-[56](?:[.-]|$)|o[134](?:-|$))", canonical):
+        payload["reasoning_effort"] = effort
+
+    output_format = output_config.get("format")
+    if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "response",
+                "strict": True,
+                "schema": normalize_strict_response_schema(output_format["schema"]),
+            },
+        }
+
+    needs_responses = canonical == "gpt-6-astra" or (
+        canonical.startswith("gpt-5.6-") and bool(payload.get("tools"))
+    )
+    if needs_responses:
+        # Astra and 5.6 reasoning tool calls require Responses. The pinned
+        # LiteLLM catalog predates these models, so explicitly allow effort.
+        payload["allowed_openai_params"] = ["reasoning_effort", "tools", "tool_choice", "response_format"]
+        for key in ("temperature", "top_p", "top_k", "logprobs", "top_logprobs", "stop"):
+            payload.pop(key, None)
+        if effort in ("none", "minimal"):
+            payload["reasoning_effort"] = "low"
+        elif effort in ("max", "ultra"):
+            # The pinned bridge recognizes newer efforts when supplied as a dict.
+            payload["reasoning_effort"] = {"effort": effort}
+        if resolve_transport:
+            provider, _, deployment = payload["model"].partition("/")
+            deployment = deployment.removeprefix("responses/")
+            if provider == "azure_ai":
+                # Use the same Foundry account/key via its Azure OpenAI endpoint.
+                provider = "azure"
+                payload["api_base"] = payload["api_base"].rstrip("/").removesuffix("/models")
+            payload["model"] = f"{provider}/responses/{deployment}"
+            # Preserve the provider through LiteLLM's nested Responses call;
+            # otherwise it can infer OpenAI and send Azure requests to /responses.
+            payload["custom_llm_provider"] = provider
+            payload.setdefault("metadata", {})
+            payload.setdefault("litellm_metadata", {})
+
+def extract_client_api_key(request: Request) -> Optional[str]:
+    """Extract the API key from the client request headers (x-api-key or Authorization: Bearer)."""
+    key = request.headers.get("x-api-key")
+    if key:
+        return key
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:]
+    return None
+
 @app.middleware("http")
-async def log_requests(request: Request, call_next):
-    # Get request details
+async def auth_and_log(request: Request, call_next):
     method = request.method
     path = request.url.path
-    
-    # Log only basic request details at debug level
-    logger.debug(f"Request: {method} {path}")
-    
-    # Process the request and get the response
-    response = await call_next(request)
-    
-    return response
 
-# Not using validation function as we're using the environment API key
+    # Skip auth for non-API routes (healthcheck, root, docs)
+    if path.startswith("/v1/") or path in ("/chat/completions", "/models"):
+        client_key = extract_client_api_key(request)
+
+        # If PROXY_API_KEY is configured, require it
+        if PROXY_API_KEY and client_key != PROXY_API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"error": {"type": "authentication_error", "message": "Invalid or missing API key"}},
+            )
+
+        # Stash the client key so endpoints can use it for passthrough
+        request.state.client_api_key = client_key
+
+    logger.debug(f"Request: {method} {path}")
+    response = await call_next(request)
+    return response
 
 def parse_tool_result_content(content):
     """Helper function to properly parse and normalize tool result content."""
@@ -442,6 +1020,18 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
     # Add conversation messages
     for idx, msg in enumerate(anthropic_request.messages):
         content = msg.content
+        if msg.role == "system":
+            if isinstance(content, str):
+                system_text = content
+            else:
+                system_text = "\n\n".join(
+                    getattr(block, "text", getattr(block, "thinking", ""))
+                    for block in content
+                    if getattr(block, "type", None) in ("text", "thinking")
+                )
+            if system_text.strip():
+                messages.append({"role": "system", "content": system_text.strip()})
+            continue
         if isinstance(content, str):
             messages.append({"role": msg.role, "content": content})
         else:
@@ -459,7 +1049,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                             text_content += block.text + "\n"
                         elif block.type == "tool_result":
                             # Add tool result as a message by itself - simulate the normal flow
-                            tool_id = block.tool_use_id if hasattr(block, "tool_use_id") else ""
+                            tool_id = normalize_provider_tool_call_id(block.tool_use_id if hasattr(block, "tool_use_id") else "")
                             
                             # Handle different formats of tool result content
                             result_content = ""
@@ -498,33 +1088,45 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                                     except:
                                         result_content = "Unparseable content"
                             
-                            # In OpenAI format, tool results come from the user (rather than being content blocks)
-                            text_content += f"Tool result for {tool_id}:\n{result_content}\n"
-                
-                # Add as a single user message with all the content
-                messages.append({"role": "user", "content": text_content.strip()})
+                            # OpenAI/Azure requires one role=tool message per
+                            # assistant tool_call, keyed by tool_call_id.
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_id,
+                                "content": result_content or "",
+                            })
+
+                # Preserve any ordinary text accompanying the tool results.
+                if text_content.strip():
+                    messages.append({"role": "user", "content": text_content.strip()})
             else:
                 # Regular handling for other message types
                 processed_content = []
+                processed_tool_calls = []
                 for block in content:
                     if hasattr(block, "type"):
                         if block.type == "text":
                             processed_content.append({"type": "text", "text": block.text})
+                        elif block.type == "thinking":
+                            processed_content.append({"type": "text", "text": block.thinking})
                         elif block.type == "image":
                             processed_content.append({"type": "image", "source": block.source})
                         elif block.type == "tool_use":
-                            # Handle tool use blocks if needed
-                            processed_content.append({
-                                "type": "tool_use",
-                                "id": block.id,
-                                "name": block.name,
-                                "input": block.input
+                            # Anthropic tool_use blocks become OpenAI assistant
+                            # tool_calls; they cannot appear in message.content.
+                            processed_tool_calls.append({
+                                "id": normalize_provider_tool_call_id(block.id),
+                                "type": "function",
+                                "function": {
+                                    "name": block.name,
+                                    "arguments": json.dumps(block.input),
+                                },
                             })
                         elif block.type == "tool_result":
                             # Handle different formats of tool result content
                             processed_content_block = {
                                 "type": "tool_result",
-                                "tool_use_id": block.tool_use_id if hasattr(block, "tool_use_id") else ""
+                                "tool_use_id": normalize_provider_tool_call_id(block.tool_use_id if hasattr(block, "tool_use_id") else "")
                             }
                             
                             # Process the content field properly
@@ -544,13 +1146,23 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
                                 
                             processed_content.append(processed_content_block)
                 
-                messages.append({"role": msg.role, "content": processed_content})
+                message = {"role": msg.role, "content": processed_content}
+                if processed_tool_calls:
+                    message["tool_calls"] = processed_tool_calls
+                    if not processed_content:
+                        message["content"] = None
+                messages.append(message)
     
-    # Cap max_tokens for OpenAI models to their limit of 16384
+    # Cap max_tokens for OpenAI/Azure models to their limit of 16384
     max_tokens = anthropic_request.max_tokens
-    if anthropic_request.model.startswith("openai/") or anthropic_request.model.startswith("gemini/"):
+    if (
+        anthropic_request.model.startswith("openai/")
+        or anthropic_request.model.startswith("gemini/")
+        or anthropic_request.model.startswith("azure/")
+        or anthropic_request.model.startswith("azure_ai/")
+    ):
         max_tokens = min(max_tokens, 16384)
-        logger.debug(f"Capping max_tokens to 16384 for OpenAI/Gemini model (original value: {anthropic_request.max_tokens})")
+        logger.debug(f"Capping max_tokens to 16384 for OpenAI/Gemini/Azure model (original value: {anthropic_request.max_tokens})")
     
     # Create LiteLLM request dict
     litellm_request = {
@@ -559,8 +1171,10 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         "max_completion_tokens": max_tokens,
         "temperature": anthropic_request.temperature,
         "stream": anthropic_request.stream,
+        # Let CCP switch deployments immediately on Azure 429s instead of
+        # waiting through LiteLLM's internal retry loop.
+        "num_retries": 0,
     }
-
     # Only include thinking field for Anthropic models
     if anthropic_request.thinking and anthropic_request.model.startswith("anthropic/"):
         litellm_request["thinking"] = anthropic_request.thinking
@@ -577,10 +1191,17 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
     
     # Convert tools to OpenAI format
     if anthropic_request.tools:
+        source_tools = anthropic_request.tools
+        if len(source_tools) > MAX_PROVIDER_TOOLS and not anthropic_request.model.startswith("anthropic/"):
+            logger.warning(
+                "Tool list has %d entries for %s; truncating to provider limit of %d",
+                len(source_tools), anthropic_request.model, MAX_PROVIDER_TOOLS,
+            )
+            source_tools = source_tools[:MAX_PROVIDER_TOOLS]
         openai_tools = []
         is_gemini_model = anthropic_request.model.startswith("gemini/")
 
-        for tool in anthropic_request.tools:
+        for tool in source_tools:
             # Convert to dict if it's a pydantic model
             if hasattr(tool, 'dict'):
                 tool_dict = tool.dict()
@@ -623,7 +1244,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
         if choice_type == "auto":
             litellm_request["tool_choice"] = "auto"
         elif choice_type == "any":
-            litellm_request["tool_choice"] = "any"
+            litellm_request["tool_choice"] = "required"
         elif choice_type == "tool" and "name" in tool_choice_dict:
             litellm_request["tool_choice"] = {
                 "type": "function",
@@ -633,6 +1254,7 @@ def convert_anthropic_to_litellm(anthropic_request: MessagesRequest) -> Dict[str
             # Default to auto if we can't determine
             litellm_request["tool_choice"] = "auto"
     
+    prepare_provider_request(litellm_request, anthropic_request, resolve_transport=False)
     return litellm_request
 
 def convert_litellm_to_anthropic(litellm_response: Union[Dict[str, Any], Any], 
@@ -641,16 +1263,6 @@ def convert_litellm_to_anthropic(litellm_response: Union[Dict[str, Any], Any],
     
     # Enhanced response extraction with better error handling
     try:
-        # Get the clean model name to check capabilities
-        clean_model = original_request.model
-        if clean_model.startswith("anthropic/"):
-            clean_model = clean_model[len("anthropic/"):]
-        elif clean_model.startswith("openai/"):
-            clean_model = clean_model[len("openai/"):]
-        
-        # Check if this is a Claude model (which supports content blocks)
-        is_claude_model = clean_model.startswith("claude-")
-        
         # Handle ModelResponse object from LiteLLM
         if hasattr(litellm_response, 'choices') and hasattr(litellm_response, 'usage'):
             # Extract data from ModelResponse object directly
@@ -694,8 +1306,8 @@ def convert_litellm_to_anthropic(litellm_response: Union[Dict[str, Any], Any],
         if content_text is not None and content_text != "":
             content.append({"type": "text", "text": content_text})
         
-        # Add tool calls if present (tool_use in Anthropic format) - only for Claude models
-        if tool_calls and is_claude_model:
+        # Clients speak Anthropic regardless of which backend generated the call.
+        if tool_calls:
             logger.debug(f"Processing tool calls: {tool_calls}")
             
             # Convert to list if it's not already
@@ -733,48 +1345,6 @@ def convert_litellm_to_anthropic(litellm_response: Union[Dict[str, Any], Any],
                     "name": name,
                     "input": arguments
                 })
-        elif tool_calls and not is_claude_model:
-            # For non-Claude models, convert tool calls to text format
-            logger.debug(f"Converting tool calls to text for non-Claude model: {clean_model}")
-            
-            # We'll append tool info to the text content
-            tool_text = "\n\nTool usage:\n"
-            
-            # Convert to list if it's not already
-            if not isinstance(tool_calls, list):
-                tool_calls = [tool_calls]
-                
-            for idx, tool_call in enumerate(tool_calls):
-                # Extract function data based on whether it's a dict or object
-                if isinstance(tool_call, dict):
-                    function = tool_call.get("function", {})
-                    tool_id = tool_call.get("id", f"tool_{uuid.uuid4()}")
-                    name = function.get("name", "")
-                    arguments = function.get("arguments", "{}")
-                else:
-                    function = getattr(tool_call, "function", None)
-                    tool_id = getattr(tool_call, "id", f"tool_{uuid.uuid4()}")
-                    name = getattr(function, "name", "") if function else ""
-                    arguments = getattr(function, "arguments", "{}") if function else "{}"
-                
-                # Convert string arguments to dict if needed
-                if isinstance(arguments, str):
-                    try:
-                        args_dict = json.loads(arguments)
-                        arguments_str = json.dumps(args_dict, indent=2)
-                    except json.JSONDecodeError:
-                        arguments_str = arguments
-                else:
-                    arguments_str = json.dumps(arguments, indent=2)
-                
-                tool_text += f"Tool: {name}\nArguments: {arguments_str}\n\n"
-            
-            # Add or append tool text to content
-            if content and content[0]["type"] == "text":
-                content[0]["text"] += tool_text
-            else:
-                content.append({"type": "text", "text": tool_text})
-        
         # Get usage information - extract values safely from object or dict
         if isinstance(usage_info, dict):
             prompt_tokens = usage_info.get("prompt_tokens", 0)
@@ -796,12 +1366,12 @@ def convert_litellm_to_anthropic(litellm_response: Union[Dict[str, Any], Any],
         
         # Make sure content is never empty
         if not content:
-            content.append({"type": "text", "text": ""})
+            content.append({"type": "text", "text": "..."})
         
         # Create Anthropic-style response
         anthropic_response = MessagesResponse(
             id=response_id,
-            model=original_request.model,
+            model=original_request.original_model or original_request.model,
             role="assistant",
             content=content,
             stop_reason=stop_reason,
@@ -1104,6 +1674,8 @@ async def create_message(
         # Parse the raw body as JSON since it's bytes
         body_json = json.loads(body.decode('utf-8'))
         original_model = body_json.get("model", "unknown")
+        request.original_model = original_model
+        apply_context_window_route(request, raw_request.headers.get("anthropic-beta", ""))
         
         # Get the display name for logging, just the model name without provider prefix
         display_model = original_model
@@ -1116,14 +1688,33 @@ async def create_message(
             clean_model = clean_model[len("anthropic/"):]
         elif clean_model.startswith("openai/"):
             clean_model = clean_model[len("openai/"):]
+        elif clean_model.startswith("azure/"):
+            clean_model = clean_model[len("azure/"):]
+        elif clean_model.startswith("azure_ai/"):
+            clean_model = clean_model[len("azure_ai/"):]
         
+        gated = ccp_lifecycle.manager.not_deployed_response(clean_model)
+        if gated is not None:
+            return gated
+
         logger.debug(f"📊 PROCESSING REQUEST: Model={request.model}, Stream={request.stream}")
         
         # Convert Anthropic request to LiteLLM format
         litellm_request = convert_anthropic_to_litellm(request)
         
         # Determine which API key to use based on the model
-        if request.model.startswith("openai/"):
+        if request.model.startswith("azure_ai/"):
+            litellm_request["api_key"] = AZURE_AI_API_KEY
+            litellm_request["api_base"] = AZURE_AI_API_BASE
+            litellm_request["api_version"] = AZURE_AI_API_VERSION
+            litellm_request["custom_llm_provider"] = "azure_ai"
+            logger.debug(f"Using Azure AI Foundry with base={AZURE_AI_API_BASE} for model: {request.model}")
+        elif request.model.startswith("azure/"):
+            litellm_request["api_key"] = AZURE_API_KEY
+            litellm_request["api_base"] = AZURE_API_BASE
+            litellm_request["api_version"] = AZURE_API_VERSION
+            logger.debug(f"Using Azure OpenAI with base={AZURE_API_BASE} for model: {request.model}")
+        elif request.model.startswith("openai/"):
             litellm_request["api_key"] = OPENAI_API_KEY
             # Use custom OpenAI base URL if configured
             if OPENAI_BASE_URL:
@@ -1141,11 +1732,43 @@ async def create_message(
                 litellm_request["api_key"] = GEMINI_API_KEY
                 logger.debug(f"Using Gemini API key for model: {request.model}")
         else:
-            litellm_request["api_key"] = ANTHROPIC_API_KEY
-            logger.debug(f"Using Anthropic API key for model: {request.model}")
-        
-        # For OpenAI models - modify request format to work with limitations
-        if "openai" in litellm_request["model"] and "messages" in litellm_request:
+            # Resolve Anthropic key: env var > client-sent header > fallback
+            client_key = getattr(raw_request.state, "client_api_key", None)
+            effective_anthropic_key = ANTHROPIC_API_KEY or client_key
+
+            if effective_anthropic_key:
+                litellm_request["api_key"] = effective_anthropic_key
+                source = "env" if ANTHROPIC_API_KEY else "client header"
+                logger.debug(f"Using Anthropic API key ({source}) for model: {request.model}")
+            # If no Anthropic key at all but Azure credentials exist, fall back to the configured Azure provider.
+            elif PREFERRED_PROVIDER == "azure_ai" and AZURE_AI_API_KEY:
+                role = infer_claude_role(request.model)
+                litellm_request["model"] = map_role_to_provider_model(role or "big", "azure_ai")
+                litellm_request["api_key"] = AZURE_AI_API_KEY
+                litellm_request["api_base"] = AZURE_AI_API_BASE
+                litellm_request["api_version"] = AZURE_AI_API_VERSION
+                litellm_request["custom_llm_provider"] = "azure_ai"
+                logger.warning(f"No Anthropic key found; falling back to Azure AI Foundry for model: {request.model}")
+            elif AZURE_API_KEY:
+                # Try to map Anthropic model names to Azure deployments when possible
+                role = infer_claude_role(request.model)
+                if role:
+                    litellm_request["model"] = map_role_to_provider_model(role, "azure")
+                # Set Azure credentials
+                litellm_request["api_key"] = AZURE_API_KEY
+                litellm_request["api_base"] = AZURE_API_BASE
+                litellm_request["api_version"] = AZURE_API_VERSION
+                logger.warning(f"No Anthropic key found; falling back to Azure OpenAI for model: {request.model}")
+            else:
+                logger.error("Missing Anthropic API key and no Azure/OpenAI credentials found")
+                raise HTTPException(status_code=500, detail="Missing Anthropic API key")
+
+        group_error = apply_group_route(litellm_request, request.model)
+        if group_error is not None:
+            return group_error
+
+        # For OpenAI/Azure models - modify request format to work with limitations
+        if ("openai" in litellm_request["model"] or litellm_request["model"].startswith("azure/") or litellm_request["model"].startswith("azure_ai/")) and "messages" in litellm_request:
             logger.debug(f"Processing OpenAI model request: {litellm_request['model']}")
             
             # For OpenAI models, we need to convert content blocks to simple strings
@@ -1269,6 +1892,35 @@ async def create_message(
                         del msg[key]
             
             # 3. Final validation - check for any remaining invalid values and dump full message details
+            # Azure requires every assistant tool_call to be followed by a
+            # matching role=tool message. Claude Code can omit a result when
+            # resuming/replaying a session, so repair the provider payload at
+            # the final boundary instead of returning a 400 to the client.
+            repaired_messages = []
+            for msg in litellm_request["messages"]:
+                repaired_messages.append(msg)
+                if msg.get("role") != "assistant" or not msg.get("tool_calls"):
+                    continue
+                expected_ids = [call.get("id") for call in msg["tool_calls"] if call.get("id")]
+                next_index = len(repaired_messages)
+                following_tools = []
+                while next_index < len(litellm_request["messages"]):
+                    candidate = litellm_request["messages"][next_index]
+                    if candidate.get("role") != "tool":
+                        break
+                    following_tools.append(candidate)
+                    next_index += 1
+                present_ids = {tool.get("tool_call_id") for tool in following_tools}
+                for tool_id in expected_ids:
+                    if tool_id not in present_ids:
+                        logger.warning("Missing tool result for %s; injecting an empty provider tool response", tool_id)
+                        repaired_messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "content": "Tool result unavailable; continue without it.",
+                        })
+            litellm_request["messages"] = repaired_messages
+
             for i, msg in enumerate(litellm_request["messages"]):
                 # Log the message format for debugging
                 logger.debug(f"Message {i} format check - role: {msg.get('role')}, content type: {type(msg.get('content'))}")
@@ -1281,11 +1933,25 @@ async def create_message(
                 elif msg.get("content") is None:
                     logger.warning(f"Message {i} has None content - replacing with placeholder")
                     litellm_request["messages"][i]["content"] = "..." # Fallback placeholder
+                elif isinstance(msg.get("content"), str) and not msg["content"].strip():
+                    logger.warning(f"Message {i} has empty text content - replacing with placeholder")
+                    litellm_request["messages"][i]["content"] = "..."
+
+            for msg in litellm_request["messages"]:
+                if isinstance(msg.get("content"), list):
+                    nonempty = [
+                        block for block in msg["content"]
+                        if not (isinstance(block, dict) and block.get("type") == "text" and not str(block.get("text", "")).strip())
+                    ]
+                    msg["content"] = nonempty or "..."
         
+        prepare_provider_request(litellm_request, request)
+
         # Only log basic info about the request, not the full details
         logger.debug(f"Request for model: {litellm_request.get('model')}, stream: {litellm_request.get('stream', False)}")
         
         # Handle streaming mode
+        retry_with_azure = False
         if request.stream:
             # Use LiteLLM for streaming
             num_tools = len(request.tools) if request.tools else 0
@@ -1300,7 +1966,41 @@ async def create_message(
                 200  # Assuming success at this point
             )
             # Ensure we use the async version for streaming
-            response_generator = await litellm.acompletion(**litellm_request)
+            try:
+                response_generator = await litellm.acompletion(**litellm_request)
+            except Exception as e:
+                # Detect Anthropic 404 / provider not found errors and attempt Azure fallback once
+                err_str = str(e)
+                if is_provider_retryable_error(err_str) and AZURE_API_KEY and not retry_with_azure:
+                    logger.warning("Anthropic provider returned NotFound; attempting Azure OpenAI fallback for streaming request")
+                    # Apply Azure fallback mapping
+                    def _apply_azure_fallback():
+                        role = infer_claude_role(original_model) or "big"
+                        if "rate" in err_str.lower() or "429" in err_str:
+                            litellm_request["model"] = alternate_azure_model(litellm_request["model"], role)
+                            litellm_request["api_key"] = AZURE_API_KEY
+                            litellm_request["api_base"] = AZURE_API_BASE
+                            litellm_request["api_version"] = AZURE_API_VERSION
+                            litellm_request.pop("custom_llm_provider", None)
+                        elif PREFERRED_PROVIDER == "azure_ai" and AZURE_AI_API_KEY:
+                            litellm_request["model"] = map_role_to_provider_model(role, "azure_ai")
+                            litellm_request["api_key"] = AZURE_AI_API_KEY
+                            litellm_request["api_base"] = AZURE_AI_API_BASE
+                            litellm_request["api_version"] = AZURE_AI_API_VERSION
+                            litellm_request["custom_llm_provider"] = "azure_ai"
+                        else:
+                            litellm_request["model"] = map_role_to_provider_model(role, "azure")
+                            litellm_request["api_key"] = AZURE_API_KEY
+                            litellm_request["api_base"] = AZURE_API_BASE
+                            litellm_request["api_version"] = AZURE_API_VERSION
+                    _apply_azure_fallback()
+                    retry_with_azure = True
+
+                    # Retry once
+                    prepare_provider_request(litellm_request, request)
+                    response_generator = await litellm.acompletion(**litellm_request)
+                else:
+                    raise
             
             return StreamingResponse(
                 handle_streaming(response_generator, request),
@@ -1320,7 +2020,38 @@ async def create_message(
                 200  # Assuming success at this point
             )
             start_time = time.time()
-            litellm_response = litellm.completion(**litellm_request)
+            try:
+                litellm_response = litellm.completion(**litellm_request)
+            except Exception as e:
+                # Inspect error to see if it's an Anthropic model not found - then try Azure fallback once
+                err_str = str(e)
+                if is_provider_retryable_error(err_str) and AZURE_API_KEY and not retry_with_azure:
+                    logger.warning("Anthropic provider returned NotFound; attempting Azure OpenAI fallback for sync request")
+                    # Apply Azure fallback mapping
+                    role = infer_claude_role(original_model) or "big"
+                    if "rate" in err_str.lower() or "429" in err_str:
+                        litellm_request["model"] = alternate_azure_model(litellm_request["model"], role)
+                        litellm_request["api_key"] = AZURE_API_KEY
+                        litellm_request["api_base"] = AZURE_API_BASE
+                        litellm_request["api_version"] = AZURE_API_VERSION
+                        litellm_request.pop("custom_llm_provider", None)
+                    elif PREFERRED_PROVIDER == "azure_ai" and AZURE_AI_API_KEY:
+                        litellm_request["model"] = map_role_to_provider_model(role, "azure_ai")
+                        litellm_request["api_key"] = AZURE_AI_API_KEY
+                        litellm_request["api_base"] = AZURE_AI_API_BASE
+                        litellm_request["api_version"] = AZURE_AI_API_VERSION
+                        litellm_request["custom_llm_provider"] = "azure_ai"
+                    else:
+                        litellm_request["model"] = map_role_to_provider_model(role, "azure")
+                        litellm_request["api_key"] = AZURE_API_KEY
+                        litellm_request["api_base"] = AZURE_API_BASE
+                        litellm_request["api_version"] = AZURE_API_VERSION
+                    retry_with_azure = True
+                    # Retry once
+                    prepare_provider_request(litellm_request, request)
+                    litellm_response = litellm.completion(**litellm_request)
+                else:
+                    raise
             logger.debug(f"✅ RESPONSE RECEIVED: Model={litellm_request.get('model')}, Time={time.time() - start_time:.2f}s")
             
             # Convert LiteLLM response to Anthropic format
@@ -1383,12 +2114,99 @@ async def create_message(
         status_code = error_details.get('status_code', 500)
         raise HTTPException(status_code=status_code, detail=error_message)
 
+async def stream_openai_chunks(response_generator):
+    """Serialize LiteLLM chunks using the OpenAI SSE wire format."""
+    async for chunk in response_generator:
+        yield f"data: {json.dumps(openai_response_dict(chunk), separators=(',', ':'))}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+@app.post("/chat/completions")
+@app.post("/v1/chat/completions")
+async def create_openai_chat_completion(raw_request: Request):
+    """OpenAI-compatible chat completions endpoint backed by CCP's LiteLLM routing."""
+    try:
+        payload = await raw_request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Request body must be valid JSON")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    original_model = payload.get("model")
+    if not isinstance(original_model, str) or not original_model.strip():
+        raise HTTPException(status_code=400, detail="model is required")
+    if not isinstance(payload.get("messages"), list):
+        raise HTTPException(status_code=400, detail="messages must be an array")
+
+    payload = dict(payload)
+    for server_owned_key in ("api_key", "api_base", "api_version", "custom_llm_provider"):
+        payload.pop(server_owned_key, None)
+
+    requested_effort = payload.get("reasoning_effort")
+    payload["model"] = route_openai_compatible_model(original_model, requested_effort)
+    gated = ccp_lifecycle.manager.not_deployed_response(payload["model"])
+    if gated is not None:
+        return gated
+    configure_provider_credentials(payload, getattr(raw_request.state, "client_api_key", None))
+    group_error = apply_group_route(payload, payload["model"])
+    if group_error is not None:
+        return group_error
+    context = ProviderRequestContext(payload["model"], original_model, requested_effort)
+    prepare_provider_request(payload, context)
+
+    try:
+        if payload.get("stream", False):
+            response_generator = await litellm.acompletion(**payload)
+            return StreamingResponse(
+                stream_openai_chunks(response_generator),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+        response = litellm.completion(**payload)
+        return JSONResponse(content=openai_response_dict(response))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("OpenAI-compatible completion failed")
+        status_code = getattr(exc, "status_code", 500)
+        if not isinstance(status_code, int) or status_code < 400 or status_code > 599:
+            status_code = 500
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "error": {
+                    "message": str(exc),
+                    "type": type(exc).__name__,
+                    "param": None,
+                    "code": None,
+                }
+            },
+        )
+
+
+@app.get("/models")
+@app.get("/v1/models")
+async def openai_models():
+    """Return configured model IDs using the OpenAI model-list schema."""
+    model_ids = list(dict.fromkeys((SMALL_MODEL, BIG_MODEL, FRONTIER_MODEL)))
+    created = int(time.time())
+    return {
+        "object": "list",
+        "data": [
+            {"id": model_id, "object": "model", "created": created, "owned_by": PREFERRED_PROVIDER}
+            for model_id in model_ids
+        ],
+    }
+
+
 @app.post("/v1/messages/count_tokens")
 async def count_tokens(
     request: TokenCountRequest,
     raw_request: Request
 ):
     try:
+        request.original_model = (await raw_request.json()).get("model", request.model)
+        apply_context_window_route(request, raw_request.headers.get("anthropic-beta", ""))
         # Log the incoming token count request
         original_model = request.original_model or request.model
         
@@ -1403,6 +2221,10 @@ async def count_tokens(
             clean_model = clean_model[len("anthropic/"):]
         elif clean_model.startswith("openai/"):
             clean_model = clean_model[len("openai/"):]
+        elif clean_model.startswith("azure/"):
+            clean_model = clean_model[len("azure/"):]
+        elif clean_model.startswith("azure_ai/"):
+            clean_model = clean_model[len("azure_ai/"):]
         
         # Convert the messages to a format LiteLLM can understand
         converted_request = convert_anthropic_to_litellm(
@@ -1462,9 +2284,160 @@ async def count_tokens(
         logger.error(f"Error counting tokens: {str(e)}\n{error_traceback}")
         raise HTTPException(status_code=500, detail=f"Error counting tokens: {str(e)}")
 
+@app.get("/ccp/status")
+async def ccp_status():
+    """Operational status and active model-routing configuration for UI/CLI clients."""
+    return {
+        "service": "claude-code-proxy",
+        "profile": {
+            "active": PREPARED_PROFILE.get("active"),
+            "label": PREPARED_PROFILE.get("label"),
+            "profiles_file": PREPARED_PROFILE.get("profiles_file"),
+            "loaded": PREPARED_PROFILE.get("loaded"),
+            "provider_instances": PREPARED_PROFILE.get("provider_instances", {}),
+        },
+        "provider": PREFERRED_PROVIDER,
+        "routes": current_model_routes(),
+        "providers": PROVIDER_CAPABILITIES,
+        "azure": {
+            "api_base": AZURE_API_BASE,
+            "api_version": AZURE_API_VERSION,
+            "subscription_id": AZURE_SUBSCRIPTION_ID,
+            "resource_group": AZURE_RESOURCE_GROUP,
+            "account_name": AZURE_ACCOUNT_NAME,
+            "location": AZURE_LOCATION,
+            "configured": bool(AZURE_API_KEY and AZURE_API_BASE),
+            "deployment_map_size": len(AZURE_DEPLOYMENT_MAP),
+        },
+        "azure_ai": {
+            "api_base": AZURE_AI_API_BASE,
+            "api_version": AZURE_AI_API_VERSION,
+            "subscription_id": AZURE_AI_SUBSCRIPTION_ID,
+            "resource_group": AZURE_AI_RESOURCE_GROUP,
+            "account_name": AZURE_AI_ACCOUNT_NAME,
+            "location": AZURE_AI_LOCATION,
+            "configured": bool(AZURE_AI_API_KEY and AZURE_AI_API_BASE),
+        },
+        "proxy_auth_required": bool(PROXY_API_KEY),
+    }
+
+@app.get("/ccp/profiles")
+async def ccp_profiles():
+    """Sanitized profile/account/instance inventory for UI and CLI clients."""
+    return public_profiles(PROFILE_CONFIG, os.environ)
+
+@app.get("/ccp/azure/discovery")
+async def ccp_azure_discovery(include_deployments: bool = False):
+    """Discover Azure subscriptions and Cognitive Services/OpenAI resources via az CLI."""
+    try:
+        return azure_discovery(include_deployments=include_deployments)
+    except AzureDiscoveryError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+@app.get("/ccp/models")
+async def ccp_models():
+    """Static and configured model catalog used by CCP mapping decisions."""
+    return {
+        "roles": current_model_routes(),
+        "providers": {
+            "openai": OPENAI_MODELS,
+            "gemini": GEMINI_MODELS,
+            "azure": AZURE_MODELS,
+            "azure_ai": AZURE_MODELS,
+        },
+        "azure_deployment_map": AZURE_DEPLOYMENT_MAP,
+    }
+
+@app.on_event("startup")
+async def ccp_start_idle_reaper():
+    if os.environ.get("CCP_REAPER", "1") != "0":
+        ccp_lifecycle.manager.start_reaper()
+    if os.environ.get("CCP_RECONCILE", "1") != "0":
+        ccp_lifecycle.manager.schedule_reconcile()
+
+
+@app.post("/ccp/reconcile")
+async def ccp_reconcile(wait: bool = False):
+    mgr = ccp_lifecycle.manager
+    if wait:
+        return {"status": "reconciled", "groups": await mgr.reconcile()}
+    mgr.schedule_reconcile()
+    return JSONResponse(status_code=202, content={"status": "reconciling"})
+
+
+@app.get("/ccp/health")
+async def ccp_health():
+    return {"ok": True}
+
+
+@app.get("/ccp/active")
+async def ccp_active():
+    return {
+        "big": MODEL_ROLE_CONFIG["big"]["configured_model"],
+        "small": MODEL_ROLE_CONFIG["small"]["configured_model"],
+        "frontier": MODEL_ROLE_CONFIG["frontier"]["configured_model"],
+        "recent": ccp_lifecycle.manager.recent(),
+    }
+
+
+@app.get("/ccp/groups")
+async def ccp_groups():
+    return ccp_lifecycle.manager.list_groups()
+
+
+async def _ccp_group_op(op: str, group_id: str, raw_request: Request):
+    mgr = ccp_lifecycle.manager
+    group = mgr.groups().get(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail=f"Unknown group {group_id}")
+    try:
+        body = await raw_request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body = {}
+    models = body.get("models") if isinstance(body, dict) else None
+    if models is not None and (not isinstance(models, list) or not all(isinstance(m, str) for m in models)):
+        raise HTTPException(status_code=400, detail="models must be a list of strings")
+    if models is not None and not models:
+        # explicit empty selection must never widen to "all models"; omit the field for all
+        raise HTTPException(status_code=400, detail="models is empty; omit the field to target all models")
+    unknown = mgr.unknown_models(group, models)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown models for group {group_id}: {unknown}")
+    if mgr.busy(group_id):
+        raise HTTPException(status_code=409, detail=f"Group {group_id} already has an operation in progress")
+    mgr.schedule(op, group_id, models or None)
+    status = "tearing_down" if op == "teardown" else "deploying"
+    return JSONResponse(status_code=202, content={"group": group_id, "status": status})
+
+
+@app.post("/ccp/groups/{group_id}/deploy")
+async def ccp_group_deploy(group_id: str, raw_request: Request):
+    return await _ccp_group_op("deploy", group_id, raw_request)
+
+
+@app.post("/ccp/groups/{group_id}/teardown")
+async def ccp_group_teardown(group_id: str, raw_request: Request):
+    return await _ccp_group_op("teardown", group_id, raw_request)
+
+
+@app.post("/ccp/groups/{group_id}/redeploy")
+async def ccp_group_redeploy(group_id: str, raw_request: Request):
+    return await _ccp_group_op("redeploy", group_id, raw_request)
+
+
 @app.get("/")
 async def root():
-    return {"message": "Anthropic Proxy for LiteLLM"}
+    return {
+        "message": "Anthropic Proxy for LiteLLM",
+        "status": "/ccp/status",
+        "models": "/ccp/models",
+        "profiles": "/ccp/profiles",
+        "azure_discovery": "/ccp/azure/discovery",
+        "anthropic_messages": "/v1/messages",
+        "openai_chat_completions": "/v1/chat/completions",
+        "openai_models": "/v1/models",
+        "token_count": "/v1/messages/count_tokens",
+    }
 
 # Define ANSI color codes for terminal output
 class Colors:

@@ -1,0 +1,93 @@
+{
+  "active_profile": "azure-sponsorship",
+  "profiles": {
+    "azure-sponsorship": {
+      "label": "Azure Sponsorship subscription",
+      "preferred_provider": "azure_ai",
+      "routes": {
+        "frontier": "gpt-6-astra",
+        "big": "gpt-5.2-codex",
+        "small": "gpt-5.2-chat"
+      },
+      "providers": {
+        "azure": {
+          "default": "openai-eastus",
+          "instances": {
+            "openai-eastus": {
+              "subscription_id": "00000000-0000-0000-0000-000000000000",
+              "resource_group": "rg-ai-prod",
+              "account_name": "aoai-prod",
+              "location": "eastus",
+              "api_base": "https://aoai-prod.openai.azure.com/",
+              "api_version": "2025-04-01-preview",
+              "api_key_keychain": {
+                "service": "ccp.azure",
+                "account": "openai-eastus"
+              },
+              "deployment_map": {
+                "gpt-6-astra": "gpt-6-astra",
+                "gpt-5.6-luna": "gpt-5.6-luna",
+                "gpt-5.6-terra": "gpt-5.6-terra",
+                "gpt-5.6-sol": "gpt-5.6-sol",
+                "gpt-5.2": "gpt-5-2",
+                "gpt-5.2-codex": "gpt-5-2-codex",
+                "gpt-5.2-chat": "gpt-5-2-chat"
+              }
+            }
+          }
+        },
+        "azure_ai": {
+          "default": "foundry-eastus2",
+          "instances": {
+            "foundry-eastus2": {
+              "subscription_id": "00000000-0000-0000-0000-000000000000",
+              "resource_group": "rg-ai-prod",
+              "account_name": "foundry-prod",
+              "location": "eastus2",
+              "api_base": "https://foundry-prod.services.ai.azure.com/models",
+              "api_version": "2025-04-01-preview",
+              "api_key_keychain": {
+                "service": "ccp.azure_ai",
+                "account": "foundry-eastus2"
+              },
+              "deployment_map": {
+                "gpt-6-astra": "gpt-6-astra",
+                "gpt-5.6-luna": "gpt-5.6-luna",
+                "gpt-5.6-terra": "gpt-5.6-terra",
+                "gpt-5.6-sol": "gpt-5.6-sol",
+                "gpt-5.2": "gpt-5-2",
+                "gpt-5.2-codex": "gpt-5-2-codex",
+                "gpt-5.2-chat": "gpt-5-2-chat"
+              }
+            }
+          }
+        }
+      }
+    },
+    "azure-production": {
+      "label": "Production Azure subscription",
+      "preferred_provider": "azure",
+      "routes": {
+        "frontier": "gpt-6-astra",
+        "big": "gpt-5.2-codex",
+        "small": "gpt-5.2-chat"
+      },
+      "providers": {
+        "azure": {
+          "default": "openai-prod",
+          "instances": {
+            "openai-prod": {
+              "subscription_id": "11111111-1111-1111-1111-111111111111",
+              "resource_group": "rg-ai-prod",
+              "account_name": "aoai-prod",
+              "location": "eastus2",
+              "api_base": "https://aoai-prod.openai.azure.com/",
+              "api_version": "2025-04-01-preview",
+              "api_key_env": "AZURE_PROD_OPENAI_KEY"
+            }
+          }
+        }
+      }
+    }
+  }
+}

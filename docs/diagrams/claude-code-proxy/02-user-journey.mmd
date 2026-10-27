@@ -1,0 +1,22 @@
+%% Claude Code Proxy — User Journey
+sequenceDiagram
+    actor Dev as Developer
+    participant CLI as Claude Code CLI
+    participant Proxy as CCP :8082
+    participant LiteLLM
+    participant Azure as Azure OpenAI
+
+    Dev->>CLI: export ANTHROPIC_BASE_URL=http://localhost:8082
+    Dev->>CLI: claude "refactor this function"
+    CLI->>Proxy: POST /v1/messages (Anthropic format, model=claude-3-5-sonnet)
+    Note over Proxy: auth_and_log (optional PROXY_API_KEY)
+    Proxy->>Proxy: convert_anthropic_to_litellm
+    Proxy->>Proxy: sonnet -> BIG_MODEL (gpt-4.1)
+    Proxy->>Proxy: resolve_azure_deployment(gpt-4.1 -> gpt-4-1)
+    Proxy->>LiteLLM: completion(azure/gpt-4-1, stream=true)
+    LiteLLM->>Azure: chat/completions (streaming)
+    Azure-->>LiteLLM: SSE chunks
+    LiteLLM-->>Proxy: async generator
+    Proxy->>Proxy: handle_streaming (SSE Anthropic events)
+    Proxy-->>CLI: event: content_block_delta ...
+    CLI-->>Dev: rendered diff

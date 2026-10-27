@@ -1,0 +1,29 @@
+%% Claude Code Proxy — Execution Formation (rev-eng)
+graph TD
+    F[Formation: fmt-ccp-revengr-20260405]
+    F --> S1[Core Proxy Squadron]
+    F --> S2[Management Squadron]
+    F --> S3[Security Squadron]
+
+    S1 --> SW1[Translation Swarm]
+    S1 --> SW2[Routing Swarm]
+    SW1 --> A1[request-converter]
+    SW1 --> A2[response-converter]
+    SW1 --> A3[stream-bridge]
+    SW1 --> A4[tool-mapper]
+    SW2 --> A5[provider-selector]
+    SW2 --> A6[azure-deployment-resolver]
+    SW2 --> A7[fallback-handler]
+
+    S2 --> SW3[UX Swarm]
+    S2 --> SW4[Lifecycle Swarm]
+    SW3 --> A8[menu-bar-app Swift]
+    SW3 --> A9[ccp-switcher TUI]
+    SW3 --> A10[ccp-litellm CLI]
+    SW4 --> A11[LaunchAgent proxy]
+    SW4 --> A12[LaunchAgent menubar]
+
+    S3 --> SW5[Supply Chain Swarm]
+    SW5 --> A13[version-pinner <1.82.0]
+    SW5 --> A14[policy-doc]
+    SW5 --> A15[audit-checker]
