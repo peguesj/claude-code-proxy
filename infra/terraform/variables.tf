@@ -37,3 +37,14 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "deploy_deadman" {
+  description = "Deploy the Azure Function dead-man switch that deletes idle on_demand deployments."
+  type        = bool
+  default     = true
+}
+
+variable "deadman_location" {
+  type    = string
+  default = "eastus"
+}

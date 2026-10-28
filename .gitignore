@@ -52,3 +52,9 @@ apm/ccp_group_state.json
 # local deployment registry (real account names); see ccp_groups.example.json
 ccp_groups.json
 apm/provision-results.json
+
+# LiteLLM proxy watchdog runtime (scripts/proxy_watchdog.sh)
+apm/watchdog.jsonl
+apm/.swap-lock
+apm/.swap-ready
+apm/.watchdog.pid

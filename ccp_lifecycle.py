@@ -40,6 +40,22 @@ PROVIDER_PREFIXES = ("azure/", "azure_ai/", "openai/")
 NON_GROUP_PREFIXES = ("anthropic/", "gemini/")
 
 AzRunner = Callable[[List[str]], Awaitable[Tuple[int, str, str]]]
+HEARTBEAT_THROTTLE_SECONDS = 300
+
+
+DEPLOY_RETRY_DELAYS = (15, 30, 60, 120)  # deployment name busy (deleting/failed): wait, never rename
+_BUSY_MARKERS = ("deleting", "inuse", "in use", "conflict", "provisioningstate", "another operation", "failed state")
+
+
+def torn_tag(deployment: str) -> str:
+    """Tag set when a deployment is torn down, so it stays identifiable by its registry name."""
+    return heartbeat_tag(deployment).replace("ccp-hb-", "ccp-torn-", 1)
+
+
+def heartbeat_tag(deployment: str) -> str:
+    """Azure tag name holding a deployment's last-used time; must match infra/deadman."""
+    import re
+    return "ccp-hb-" + re.sub(r"[^A-Za-z0-9_-]", "-", deployment)[:240]
 
 
 def _now() -> datetime:
@@ -92,6 +108,9 @@ class GroupManager:
         self._reaper: Optional[asyncio.Task] = None
         self._inflight: set = set()
         self._last_touch_save = 0.0
+        self._hb_last: Dict[str, float] = {}
+        self.retry_delays = DEPLOY_RETRY_DELAYS
+        self.sleep = asyncio.sleep
 
     # ---- registry -------------------------------------------------------
     def groups(self) -> Dict[str, Dict[str, Any]]:
@@ -270,6 +289,41 @@ class GroupManager:
         if mono - self._last_touch_save >= 15:
             self._last_touch_save = mono
             self._save()
+        if group.get("policy") == "on_demand":
+            self._schedule_heartbeat(group, [model.get("deployment", model["name"])])
+
+    # ---- Azure dead-man heartbeat ----------------------------------------
+    def _schedule_heartbeat(self, group: Dict[str, Any], deployments: List[str]) -> None:
+        acct = group["account"]
+        mono = time.monotonic()
+        if mono - self._hb_last.get(acct, -1e9) < HEARTBEAT_THROTTLE_SECONDS:
+            return
+        self._hb_last[acct] = mono
+        try:
+            task = asyncio.get_running_loop().create_task(self.push_heartbeat(group, deployments))
+        except RuntimeError:
+            return
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def push_heartbeat(self, group: Dict[str, Any], deployments: List[str]) -> bool:
+        """Tag the on_demand account so the Azure dead-man function sees recent use. Never raises."""
+        now = _iso(self.clock())
+        tags = [f"ccp-policy=on_demand", f"ccp-idle-minutes={int(group.get('idle_teardown_minutes', 60))}"]
+        tags += [f"{heartbeat_tag(d)}={now}" for d in deployments]
+        return await self._tag(group, tags)
+
+    async def _tag(self, group: Dict[str, Any], tags: List[str]) -> bool:
+        try:
+            code, _, err = await self.az([
+                "resource", "tag", "--is-incremental", "-g", group["resource_group"], "-n", group["account"],
+                "--resource-type", "Microsoft.CognitiveServices/accounts", "--tags", *tags, "-o", "none"])
+        except Exception as exc:  # noqa: BLE001
+            code, err = 1, str(exc)
+        if code != 0:
+            logger.warning("dead-man heartbeat for %s failed: %s", group["account"], err.strip()[:200])
+            return False
+        return True
 
     def is_available(self, group: Dict[str, Any], model: Dict[str, Any]) -> bool:
         if group.get("policy") != "on_demand":
@@ -315,7 +369,8 @@ class GroupManager:
             if status == "deployed" and not deployed and not entry.get("reconciled_at"):
                 # empty list on a deployed group means "all models" internally; expose it explicitly
                 deployed = sorted({m["name"] for m in group.get("models", []) if m.get("name")})
-            st = {"status": status, "last_used": entry.get("last_used"), "deployed_models": deployed}
+            st = {"status": status, "last_used": entry.get("last_used"), "deployed_models": deployed,
+                  "torn_down_models": list(entry.get("torn_down_models") or [])}
             if entry.get("error"):
                 st["error"] = entry["error"]
             if entry.get("reconciled_at"):
@@ -400,21 +455,42 @@ class GroupManager:
             await self._az(["cognitiveservices", "account", "create", "-n", acct, "-g", rg, "-l", region,
                             "--kind", "AIServices", "--sku", "S0", "--custom-domain", acct, "--yes", "-o", "none"])
         for m in models:
-            await self._az([
-                "cognitiveservices", "account", "deployment", "create", "-g", rg, "-n", acct,
-                "--deployment-name", m.get("deployment", m["name"]), "--model-name", m["name"],
-                "--model-version", str(m.get("version", "")), "--model-format", m.get("format", "OpenAI"),
-                "--sku-name", m.get("sku", "GlobalStandard"), "--sku-capacity", str(m.get("capacity", 1)),
-                "-o", "none"])
+            await self._create_deployment(rg, acct, m)
         entry = self._entry(group["id"])
         deployed = set(entry.get("deployed_models") or []) if names else set()
         deployed |= {m["name"] for m in models}
         now = _iso(self.clock())
         entry.update(status="deployed", last_used=now, deployed_models=sorted(deployed))
+        entry["torn_down_models"] = sorted(set(entry.get("torn_down_models") or []) - deployed)
         entry.pop("error", None)
         for m in models:
             entry.setdefault("model_last_used", {})[m["name"]] = now
         self._save()
+        if group.get("policy") == "on_demand" and models:
+            # Fresh deploys get a heartbeat immediately so the Azure dead-man switch does not reap them.
+            self._hb_last[acct] = time.monotonic()
+            await self.push_heartbeat(group, [m.get("deployment", m["name"]) for m in models])
+
+    @staticmethod
+    def deployment_args(rg: str, acct: str, m: Dict[str, Any]) -> List[str]:
+        """Registry is the source of truth: identical name/model/version/sku/capacity on every (re)deploy."""
+        return ["cognitiveservices", "account", "deployment", "create", "-g", rg, "-n", acct,
+                "--deployment-name", m.get("deployment", m["name"]), "--model-name", m["name"],
+                "--model-version", str(m.get("version", "")), "--model-format", m.get("format", "OpenAI"),
+                "--sku-name", m.get("sku", "GlobalStandard"), "--sku-capacity", str(m.get("capacity", 1)),
+                "-o", "none"]
+
+    async def _create_deployment(self, rg: str, acct: str, m: Dict[str, Any]) -> None:
+        args = self.deployment_args(rg, acct, m)
+        for delay in (*self.retry_delays, None):
+            code, _, err = await self.az(args)
+            if code == 0:
+                return
+            busy = any(k in err.lower() for k in _BUSY_MARKERS)
+            if delay is None or not busy:
+                raise RuntimeError(f"az deployment create {args[8]} failed ({code}): {err.strip()[:300]}")
+            logger.info("deployment %s busy, retrying same name in %ss", args[8], delay)
+            await self.sleep(delay)
 
     async def _teardown(self, group: Dict[str, Any], names: Optional[List[str]]) -> None:
         rg, acct = group["resource_group"], group["account"]
@@ -434,7 +510,12 @@ class GroupManager:
         remaining = [n for n in current if n not in {m["name"] for m in models}]
         entry["deployed_models"] = remaining
         entry["status"] = "deployed" if remaining else "torn_down"
+        if group.get("policy") == "on_demand":
+            torn = set(entry.get("torn_down_models") or []) | {m["name"] for m in models}
+            entry["torn_down_models"] = sorted(torn - set(remaining))
         self._save()
+        if group.get("policy") == "on_demand" and models:
+            await self._tag(group, [f"{torn_tag(m.get('deployment', m['name']))}={_iso(self.clock())}" for m in models])
 
     # ---- reconcile ------------------------------------------------------
     async def reconcile_group(self, gid: str) -> Optional[Dict[str, Any]]:
@@ -460,7 +541,19 @@ class GroupManager:
             account_exists = True
         by_dep = {m.get("deployment") or m["name"]: m["name"] for m in group.get("models", [])}
         names = sorted({by_dep.get(d.get("name"), d.get("name")) for d in listed if d.get("name")})
+        torn: List[str] = []
+        if account_exists and group.get("policy") == "on_demand":
+            c2, tout, _ = await self.az(["cognitiveservices", "account", "show", "-g", group["resource_group"],
+                                         "-n", group["account"], "--query", "tags", "-o", "json"])
+            try:
+                acct_tags = json.loads(tout or "{}") if c2 == 0 else {}
+            except ValueError:
+                acct_tags = {}
+            keys = {k.lower() for k in acct_tags} if isinstance(acct_tags, dict) else set()
+            torn = sorted(m["name"] for m in group.get("models", [])
+                          if torn_tag(m.get("deployment", m["name"])).lower() in keys and m["name"] not in names)
         entry = self._entry(gid)
+        entry["torn_down_models"] = torn
         entry.update(
             status="deployed" if names else ("torn_down" if group.get("policy") == "on_demand" else "undeployed"),
             deployed_models=names,

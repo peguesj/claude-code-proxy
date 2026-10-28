@@ -1,6 +1,10 @@
 terraform {
   required_version = ">= 1.5"
   required_providers {
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
     azurerm = {
       source  = "hashicorp/azurerm"
       version = "~> 4.0"
@@ -53,7 +57,15 @@ resource "azurerm_cognitive_account" "g" {
   kind                  = "AIServices"
   sku_name              = "S0"
   custom_subdomain_name = each.value.account
-  tags                  = local.tags
+  tags = merge(local.tags, each.value.policy == "on_demand" ? {
+    "ccp-policy"       = "on_demand"
+    "ccp-idle-minutes" = tostring(try(each.value.idle_teardown_minutes, 60))
+  } : {})
+
+  # ccp-hb-*/ccp-torn-* tags are written at runtime by the proxy and the dead-man function.
+  lifecycle {
+    ignore_changes = [tags]
+  }
 
   identity {
     type = "SystemAssigned"

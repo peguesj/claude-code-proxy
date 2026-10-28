@@ -146,9 +146,9 @@ async def log_request_validation_error(request: Request, exc: RequestValidationE
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:8787", "http://127.0.0.1:8787", "http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "x-api-key", "anthropic-version", "anthropic-beta"],
 )
 
 # Get API keys from environment
@@ -929,6 +929,16 @@ def extract_client_api_key(request: Request) -> Optional[str]:
 async def auth_and_log(request: Request, call_next):
     method = request.method
     path = request.url.path
+
+    # Lifecycle mutators cost money / tear down Azure resources: refuse anything a browser sent
+    # (CSRF via simple-request POST to localhost). Native clients (ccp CLI, menubar) send neither header.
+    if path.startswith("/ccp/") and method not in ("GET", "HEAD", "OPTIONS"):
+        if request.headers.get("origin") or request.headers.get("sec-fetch-site") not in (None, "none"):
+            return JSONResponse(status_code=403, content={"error": {"type": "forbidden",
+                                "message": "Browser-originated requests to /ccp lifecycle endpoints are not allowed"}})
+        if PROXY_API_KEY and extract_client_api_key(request) != PROXY_API_KEY:
+            return JSONResponse(status_code=401, content={"error": {"type": "authentication_error",
+                                "message": "Invalid or missing API key"}})
 
     # Skip auth for non-API routes (healthcheck, root, docs)
     if path.startswith("/v1/") or path in ("/chat/completions", "/models"):

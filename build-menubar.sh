@@ -121,7 +121,7 @@ cat > "$PROXY_PLIST" << PLIST
         <string>${SCRIPT_DIR}/.venv/bin/uvicorn</string>
         <string>server:app</string>
         <string>--host</string>
-        <string>127.0.0.1</string>
+        <string>0.0.0.0</string>
         <string>--port</string>
         <string>8082</string>
     </array>

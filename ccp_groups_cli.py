@@ -160,6 +160,7 @@ def file_groups() -> list:
         entry["status"] = st.get("status", "unknown")
         entry["last_used"] = st.get("last_used")
         entry["deployed_models"] = st.get("deployed_models", [])
+        entry["torn_down_models"] = st.get("torn_down_models", [])
         merged.append(entry)
     return merged
 
@@ -247,6 +248,8 @@ def cmd_list(args) -> int:
             print(f"\n{g.get('id', '?')}:")
             for m in g.get("models") or []:
                 state = "deployed" if is_deployed(m, deployed) else "torn down"
+                if m.get("name") in (g.get("torn_down_models") or []):
+                    state = f"torn down (idle) -> ccp groups deploy {g.get('id')} --models {m.get('name')}"
                 address = m.get("addressable") or m.get("name", "?")
                 print(f"  - {address:<36} {m.get('kind', '?'):<10} "
                       f"{m.get('sku', '?')} x{m.get('capacity', '?'):<4} {state}")

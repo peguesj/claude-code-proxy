@@ -102,6 +102,7 @@ struct GroupInfo: Identifiable, Hashable {
     let status: GroupStatus
     let lastUsed: Date?
     let deployedModels: [String]
+    let tornDownModels: [String]
 
     var isOnDemand: Bool { policy == "on_demand" }
 
@@ -191,7 +192,8 @@ enum Parse {
             models: models,
             status: status,
             lastUsed: date(state["last_used"]),
-            deployedModels: (state["deployed_models"] as? [String]) ?? []
+            deployedModels: (state["deployed_models"] as? [String]) ?? [],
+            tornDownModels: (state["torn_down_models"] as? [String]) ?? []
         )
     }
 }
@@ -656,6 +658,8 @@ struct ModelPickerView: View {
         let deployed = Set(g.deployedModels)
         switch request.action {
         case .deploy:
+            let torn = g.models.map(\.name).filter { g.tornDownModels.contains($0) }
+            if !torn.isEmpty { selected = Set(torn); return }
             let missing = g.models.map(\.name).filter { !deployed.contains($0) }
             selected = Set(missing.isEmpty ? g.models.map(\.name) : missing)
         case .teardown, .redeploy:

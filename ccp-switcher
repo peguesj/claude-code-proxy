@@ -691,7 +691,7 @@ do_restart() {
     sleep 1
 
     printf '  %sStarting proxy...%s\n' "${CLR_GREEN}" "${RESET}"
-    cd "$SCRIPT_DIR" && nohup uv run uvicorn server:app --host 127.0.0.1 --port "$PROXY_PORT" --reload > /dev/null 2>&1 &
+    cd "$SCRIPT_DIR" && nohup uv run uvicorn server:app --host 0.0.0.0 --port "$PROXY_PORT" --reload > /dev/null 2>&1 &
     disown
     sleep 2
 

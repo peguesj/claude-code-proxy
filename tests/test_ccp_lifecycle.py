@@ -342,3 +342,115 @@ def test_reconcile_endpoint(routed):
         r = c.post("/ccp/reconcile?wait=true")
         assert r.status_code == 200 and set(r.json()["groups"]) == {"legacy-werc", "chat-eus", "chat-eus-od"}
         assert c.post("/ccp/reconcile").status_code == 202
+
+
+# ---- Azure dead-man heartbeat ----------------------------------------------
+def _tag_calls(calls):
+    return [c for c in calls if c[:2] == ["resource", "tag"]]
+
+
+def test_heartbeat_tag_sanitizes():
+    assert ccp_lifecycle.heartbeat_tag("gpt-5.4-mini-ptu") == "ccp-hb-gpt-5-4-mini-ptu"
+
+
+def test_deploy_on_demand_pushes_heartbeat_immediately(env):
+    mgr, calls, clock, _, _ = env
+    asyncio.run(mgr.run("deploy", "speech-eus", ["gpt-audio"]))
+    tags = _tag_calls(calls)
+    assert len(tags) == 1
+    args = tags[0]
+    assert "ccp-speech" in args and "--is-incremental" in args
+    assert "ccp-policy=on_demand" in args and "ccp-idle-minutes=60" in args
+    assert f"ccp-hb-gpt-audio={clock.now.isoformat()}" in args
+
+
+def test_touch_heartbeat_throttled_and_only_on_demand(env):
+    mgr, calls, clock, _, _ = env
+    set_state(mgr, "deployed", clock.now, ["gpt-audio"])
+
+    async def go():
+        mgr.touch("gpt-audio")
+        mgr.touch("gpt-audio")  # within throttle window
+        mgr.touch("gpt-4o")     # always_on: never heartbeats
+        await asyncio.gather(*list(mgr._tasks))
+    asyncio.run(go())
+    assert len(_tag_calls(calls)) == 1
+
+
+def test_heartbeat_failure_is_swallowed(env):
+    mgr, _, _, _, _ = env
+
+    async def boom(args):
+        raise OSError("az missing")
+    mgr.az = boom
+    assert asyncio.run(mgr.push_heartbeat(mgr.groups()["speech-eus"], ["gpt-audio"])) is False
+
+
+# ---- identity-preserving teardown / redeploy --------------------------------
+def _create_calls(calls):
+    return [c for c in calls if c[:4] == ["cognitiveservices", "account", "deployment", "create"]]
+
+
+def _flag(args, name):
+    return args[args.index(name) + 1]
+
+
+def test_teardown_redeploy_roundtrip_uses_identical_registry_args(env):
+    mgr, calls, _, _, _ = env
+    group = mgr.groups()["speech-eus"]
+    asyncio.run(mgr.run("deploy", "speech-eus", None))
+    first = {_flag(c, "--deployment-name"): c for c in _create_calls(calls)}
+    asyncio.run(mgr.run("teardown", "speech-eus", None))
+    calls.clear()
+    asyncio.run(mgr.run("deploy", "speech-eus", None))
+    second = {_flag(c, "--deployment-name"): c for c in _create_calls(calls)}
+    assert set(first) == set(second) == {m["deployment"] for m in group["models"]}
+    for m in group["models"]:
+        a, b = first[m["deployment"]], second[m["deployment"]]
+        assert a == b
+        assert _flag(b, "--model-version") == m["version"] and _flag(b, "--sku-name") == m["sku"]
+        assert _flag(b, "--sku-capacity") == str(m["capacity"])
+
+
+def test_teardown_tags_torn_and_never_deletes_account(env):
+    mgr, calls, _, _, _ = env
+    asyncio.run(mgr.run("teardown", "speech-eus", ["gpt-audio"]))
+    assert not [c for c in calls if c[:3] == ["cognitiveservices", "account", "delete"] or c[:2] == ["group", "delete"]]
+    tag_args = [a for c in _tag_calls(calls) for a in c]
+    assert any(a.startswith("ccp-torn-gpt-audio=") for a in tag_args)
+    assert mgr.state()["speech-eus"]["torn_down_models"] == ["gpt-audio"]
+
+
+def test_busy_deployment_name_is_retried_not_renamed(env):
+    mgr, calls, _, _, _ = env
+    attempts = []
+
+    async def flaky(args):
+        calls.append(args)
+        if args[:4] == ["cognitiveservices", "account", "deployment", "create"]:
+            attempts.append(_flag(args, "--deployment-name"))
+            if len(attempts) < 3:
+                return 1, "", "ERROR: deployment is in Deleting state"
+        return 0, "", ""
+
+    async def nosleep(_):
+        return None
+    mgr.az, mgr.sleep = flaky, nosleep
+    asyncio.run(mgr.run("deploy", "speech-eus", ["gpt-audio"]))
+    assert attempts == ["gpt-audio"] * 3
+    assert mgr.state()["speech-eus"]["status"] == "deployed"
+
+
+def test_reconcile_marks_torn_tagged_models_torn_down(env):
+    mgr, calls, _, _, _ = env
+
+    async def az(args):
+        if args[:4] == ["cognitiveservices", "account", "deployment", "list"]:
+            return 0, json.dumps([{"name": "gpt-audio-mini"}]), ""
+        if args[:3] == ["cognitiveservices", "account", "show"]:
+            return 0, json.dumps({"ccp-torn-gpt-audio": "2026-01-01T00:00:00+00:00", "ccp-hb-gpt-audio": "x"}), ""
+        return 0, "", ""
+    mgr.az = az
+    asyncio.run(mgr.reconcile_group("speech-eus"))
+    row = {g["id"]: g for g in mgr.list_groups()}["speech-eus"]
+    assert row["torn_down_models"] == ["gpt-audio"] and row["deployed_models"] == ["gpt-audio-mini"]
